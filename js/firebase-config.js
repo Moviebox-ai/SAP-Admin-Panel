@@ -10,7 +10,7 @@ const firebaseConfig = {
   projectId:         "selfattendance-42445",
   storageBucket:     "selfattendance-42445.firebasestorage.app",
   messagingSenderId: "611062377939",
-  appId:             "1:611062377939:android:c6a5659acd3433fdd21326"
+  appId:             "1:611062377939:web:d47905affdf5872bd21326"
 };
 
 firebase.initializeApp(firebaseConfig);
@@ -18,7 +18,6 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 // ── Admin emails — must match Firestore security rules isAdmin() ──
-// Add more emails here if you want additional admins.
 const ADMIN_EMAILS = ['rohanhkumar53076@gmail.com'];
 
 // ── Global state ───────────────────────────────────────────────
@@ -43,13 +42,13 @@ auth.onAuthStateChanged(async (user) => {
 
 // ── Admin verification ─────────────────────────────────────────
 // PRIMARY: Email-based check — matches the Firestore security rules
-// isAdmin() function exactly. No Firestore document needed.
+// isAdmin() function. No Firestore document needed.
 // FALLBACK: Also checks adminSettings/adminConfig.adminUids[] for
-// backwards compatibility if you've added UIDs via Firebase Console.
+// backwards compatibility.
 async function verifyAdminAccess(user) {
   showScreen('loading');
 
-  // ── Step 1: Email-based check (instant, no Firestore read) ──
+  // Step 1: Email check (instant, no Firestore read required)
   if (ADMIN_EMAILS.includes(user.email)) {
     IS_ADMIN = true;
     showScreen('app');
@@ -57,7 +56,7 @@ async function verifyAdminAccess(user) {
     return;
   }
 
-  // ── Step 2: Fallback — check adminUids in Firestore ──────────
+  // Step 2: Fallback — check adminUids in Firestore
   try {
     const snap = await db.doc('adminSettings/adminConfig').get();
     if (!snap.exists) {
