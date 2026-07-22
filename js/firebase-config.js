@@ -18,7 +18,7 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 // ── Admin emails — must match Firestore security rules isAdmin() ──
-const ADMIN_EMAILS = ['rohanhkumar53076@gmail.com'];
+const ADMIN_EMAILS = ['rohankumar53076@gmail.com'];
 
 // ── Global state ───────────────────────────────────────────────
 let currentAdmin     = null;
