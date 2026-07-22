@@ -17,6 +17,10 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
+// ── Admin emails — must match Firestore security rules isAdmin() ──
+// Add more emails here if you want additional admins.
+const ADMIN_EMAILS = ['rohanhkumar53076@gmail.com'];
+
 // ── Global state ───────────────────────────────────────────────
 let currentAdmin     = null;
 let IS_ADMIN         = false;
@@ -38,14 +42,26 @@ auth.onAuthStateChanged(async (user) => {
 });
 
 // ── Admin verification ─────────────────────────────────────────
-// Checks Firestore adminSettings/adminConfig.adminUids[] for this UID.
-// This matches your existing isAdmin() security rule exactly.
+// PRIMARY: Email-based check — matches the Firestore security rules
+// isAdmin() function exactly. No Firestore document needed.
+// FALLBACK: Also checks adminSettings/adminConfig.adminUids[] for
+// backwards compatibility if you've added UIDs via Firebase Console.
 async function verifyAdminAccess(user) {
   showScreen('loading');
+
+  // ── Step 1: Email-based check (instant, no Firestore read) ──
+  if (ADMIN_EMAILS.includes(user.email)) {
+    IS_ADMIN = true;
+    showScreen('app');
+    loadAllUsers();
+    return;
+  }
+
+  // ── Step 2: Fallback — check adminUids in Firestore ──────────
   try {
     const snap = await db.doc('adminSettings/adminConfig').get();
     if (!snap.exists) {
-      showScreen('setup', user);
+      showScreen('notAdmin', user);
       return;
     }
     const adminUids = snap.data().adminUids || [];
@@ -57,10 +73,8 @@ async function verifyAdminAccess(user) {
       showScreen('notAdmin', user);
     }
   } catch (e) {
-    // permission-denied usually means the adminConfig doc doesn't exist
-    // (catch-all deny fires). Show setup screen.
     if (e.code === 'permission-denied' || e.code === 'not-found') {
-      showScreen('setup', user);
+      showScreen('notAdmin', user);
     } else {
       alert('Firebase error during admin check: ' + e.message);
       showScreen('login');
@@ -140,7 +154,7 @@ async function loadAllUsers() {
   } catch (e) {
     console.error('loadAllUsers:', e);
     if (e.code === 'permission-denied') {
-      showToast('Permission denied on users collection. Verify UID is in adminUids.', 'error');
+      showToast('Permission denied on users collection. Check Firestore rules.', 'error');
     }
   } finally {
     usersLoading = false;
@@ -161,7 +175,6 @@ async function loadAttendance(uid, yearMonth) {
     ATTENDANCE_CACHE[key] = records;
     return records;
   } catch (e) {
-    // permission-denied = attendance rules missing || isAdmin() — expected until patch applied
     if (e.code !== 'permission-denied') console.error('loadAttendance:', uid, e);
     return [];
   }
@@ -204,9 +217,6 @@ async function deleteAttendance(uid, date) {
 }
 
 // ── Self-register helper ───────────────────────────────────────
-// Works only if Firestore rules are temporarily open or if adminConfig
-// already exists and you're already an admin (adding someone else).
-// Primary path is always the manual Firebase Console approach.
 async function selfRegisterAdmin() {
   if (!currentAdmin) return;
   try {
@@ -217,7 +227,7 @@ async function selfRegisterAdmin() {
     setTimeout(() => verifyAdminAccess(currentAdmin), 1500);
   } catch (e) {
     showToast(
-      'Auto-register blocked by Firestore rules (expected until you add the document manually). Use the Firebase Console steps above.',
+      'Auto-register blocked by Firestore rules. Use the Firebase Console steps above.',
       'error'
     );
   }
