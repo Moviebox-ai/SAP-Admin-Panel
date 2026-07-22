@@ -7,17 +7,16 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-
-  <!-- Firebase SDK v9 compat -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body class="font-inter bg-app text-primary">
 
-  <!-- ══════════ LOGIN SCREEN ══════════ -->
+  <!-- ══════════════════════════════════════════
+       SCREEN 1 — LOGIN
+  ══════════════════════════════════════════ -->
   <div id="loginScreen" class="min-h-screen flex items-center justify-center px-4">
     <div class="w-full max-w-md">
       <div class="text-center mb-8">
@@ -32,7 +31,7 @@
       </div>
 
       <div class="card p-8">
-        <h2 class="text-xl font-semibold text-primary mb-6">Firebase Admin Login</h2>
+        <h2 class="text-xl font-semibold text-primary mb-6">Sign In</h2>
         <div class="space-y-4">
           <div>
             <label class="block text-sm font-medium text-secondary mb-2">Email Address</label>
@@ -43,9 +42,7 @@
             <div class="relative">
               <input id="loginPassword" type="password" class="input-field pr-12" placeholder="••••••••" />
               <button onclick="togglePassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary hover:text-primary">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                </svg>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
           </div>
@@ -54,8 +51,6 @@
             Sign In with Firebase
           </button>
         </div>
-
-        <!-- Firebase status indicator -->
         <div id="firebaseStatus" class="mt-5 flex items-center gap-2 text-sm">
           <div class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
           <span class="text-secondary">Connecting to Firebase…</span>
@@ -64,7 +59,134 @@
     </div>
   </div>
 
-  <!-- ══════════ MAIN APP ══════════ -->
+  <!-- ══════════════════════════════════════════
+       SCREEN 2 — CHECKING ACCESS (loading)
+  ══════════════════════════════════════════ -->
+  <div id="loadingScreen" class="hidden min-h-screen flex items-center justify-center">
+    <div class="text-center">
+      <div class="spinner mx-auto mb-4"></div>
+      <p class="text-secondary">Verifying admin access…</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 3 — FIRST-TIME SETUP
+       Shown when adminSettings/adminConfig
+       does not exist yet in Firestore
+  ══════════════════════════════════════════ -->
+  <div id="setupScreen" class="hidden min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-2xl space-y-5">
+      <div class="text-center mb-2">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-violet mb-3 shadow-violet">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 1 0 0 14.14"/></svg>
+        </div>
+        <h1 class="text-2xl font-bold text-primary">First-Time Admin Setup</h1>
+        <p class="text-secondary mt-1">You're authenticated but not yet added as admin in Firestore.</p>
+      </div>
+
+      <!-- Signed-in info -->
+      <div class="card p-5">
+        <p class="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Your Account</p>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between bg-soft-surface rounded-xl px-4 py-3">
+            <span class="text-secondary text-sm">Email</span>
+            <span class="font-semibold text-primary text-sm" id="setupEmail">—</span>
+          </div>
+          <div class="flex items-center justify-between bg-soft-surface rounded-xl px-4 py-3">
+            <span class="text-secondary text-sm">Firebase UID</span>
+            <div class="flex items-center gap-2">
+              <code class="text-violet font-mono text-sm font-bold" id="setupUid">—</code>
+              <button onclick="copySetupUid()" title="Copy UID" class="text-secondary hover:text-violet transition-colors">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step-by-step -->
+      <div class="card p-6">
+        <h2 class="font-bold text-primary mb-4">Step-by-Step: Add Yourself as Admin</h2>
+        <ol class="space-y-5">
+          <li class="flex gap-4">
+            <div class="w-8 h-8 rounded-full bg-violet text-white font-bold text-sm flex items-center justify-center shrink-0 mt-0.5">1</div>
+            <div>
+              <p class="font-semibold text-primary">Open Firebase Console</p>
+              <a href="https://console.firebase.google.com/project/selfattendance-42445/firestore" target="_blank" class="text-violet text-sm underline">console.firebase.google.com → selfattendance-42445 → Firestore</a>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <div class="w-8 h-8 rounded-full bg-violet text-white font-bold text-sm flex items-center justify-center shrink-0 mt-0.5">2</div>
+            <div>
+              <p class="font-semibold text-primary">Create the adminConfig document</p>
+              <p class="text-secondary text-sm mt-1">Collection: <code class="bg-soft-surface px-1.5 py-0.5 rounded text-xs">adminSettings</code> → Document ID: <code class="bg-soft-surface px-1.5 py-0.5 rounded text-xs">adminConfig</code></p>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <div class="w-8 h-8 rounded-full bg-violet text-white font-bold text-sm flex items-center justify-center shrink-0 mt-0.5">3</div>
+            <div>
+              <p class="font-semibold text-primary">Add a field named <code class="bg-soft-surface px-1.5 py-0.5 rounded text-xs text-violet">adminUids</code></p>
+              <p class="text-secondary text-sm mt-1">Type: <strong>Array</strong> → Add your UID as a string element:</p>
+              <div class="mt-2 bg-soft-surface rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                <code class="text-violet font-mono text-sm break-all" id="setupUidInline">—</code>
+                <button onclick="copySetupUid()" class="btn-outline py-1 px-3 text-xs shrink-0">Copy</button>
+              </div>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <div class="w-8 h-8 rounded-full bg-violet text-white font-bold text-sm flex items-center justify-center shrink-0 mt-0.5">4</div>
+            <div>
+              <p class="font-semibold text-primary">Also apply the Firestore Rules Patch</p>
+              <p class="text-secondary text-sm mt-1">Download and follow <strong>FIRESTORE_RULES_PATCH.md</strong> (included in the ZIP) to allow admin read on attendance records.</p>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <div class="w-8 h-8 rounded-full bg-violet text-white font-bold text-sm flex items-center justify-center shrink-0 mt-0.5">5</div>
+            <div>
+              <p class="font-semibold text-primary">Come back and click Refresh below</p>
+            </div>
+          </li>
+        </ol>
+        <div class="flex gap-3 mt-6">
+          <button onclick="verifyAdminAccess(currentAdmin)" class="btn-primary py-3 px-6">↻ Refresh &amp; Check Access</button>
+          <button onclick="selfRegisterAdmin()" class="btn-outline py-3 px-5" title="Tries to self-register — only works if rules are open">Auto-Register (if rules allow)</button>
+          <button onclick="auth.signOut()" class="btn-ghost py-3 px-5">Sign Out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 4 — NOT AN ADMIN
+       Shown when user is authenticated but UID
+       is NOT in adminUids array
+  ══════════════════════════════════════════ -->
+  <div id="notAdminScreen" class="hidden min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-lg">
+      <div class="card p-8 text-center space-y-4">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-red-50 mb-2">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#E53935" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <h2 class="text-xl font-bold text-primary">Not Authorised as Admin</h2>
+        <p class="text-secondary text-sm">Signed in as <span class="font-semibold" id="naEmail">—</span>, but this UID is not in <code class="bg-soft-surface px-1.5 py-0.5 rounded text-xs">adminSettings/adminConfig.adminUids</code>.</p>
+        <div class="bg-soft-surface rounded-xl px-4 py-3 flex items-center justify-between gap-3 text-left">
+          <div>
+            <p class="text-xs text-secondary mb-1">Your UID — add this to adminUids in Firebase Console</p>
+            <code class="text-violet font-mono text-sm break-all" id="naUid">—</code>
+          </div>
+          <button onclick="document.getElementById('naUid').innerText && navigator.clipboard.writeText(document.getElementById('naUid').innerText);showToast('UID copied!')" class="btn-outline py-1.5 px-3 text-xs shrink-0">Copy</button>
+        </div>
+        <div class="flex gap-3 justify-center">
+          <button onclick="verifyAdminAccess(currentAdmin)" class="btn-primary py-2.5 px-6">↻ Re-check Access</button>
+          <button onclick="auth.signOut()" class="btn-ghost py-2.5 px-6">Sign Out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 5 — MAIN APP
+  ══════════════════════════════════════════ -->
   <div id="mainApp" class="hidden min-h-screen flex">
 
     <!-- Sidebar -->
@@ -94,7 +216,6 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
           Analytics
         </a>
-
         <div class="px-3 py-2 text-xs font-semibold text-sidebar-muted uppercase tracking-wider mb-1 mt-3">Management</div>
         <a href="#" class="nav-item" data-page="users" onclick="navigate('users')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -109,28 +230,22 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
           Salary Reports
         </a>
-
         <div class="px-3 py-2 text-xs font-semibold text-sidebar-muted uppercase tracking-wider mb-1 mt-3">System</div>
-        <a href="#" class="nav-item" data-page="notifications" onclick="navigate('notifications')">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          Notifications
-        </a>
         <a href="#" class="nav-item" data-page="settings" onclick="navigate('settings')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 1 0 0 14.14"/></svg>
-          Settings
+          Settings &amp; Rules
         </a>
       </nav>
 
       <div class="px-4 py-4 border-t border-sidebar-divider">
-        <!-- Firebase connected badge -->
         <div class="flex items-center gap-2 mb-3 px-1">
           <div class="w-2 h-2 rounded-full bg-green-400"></div>
-          <span class="text-xs text-sidebar-muted">Firebase Connected</span>
+          <span class="text-xs text-sidebar-muted">Firebase · Admin Verified</span>
         </div>
         <div class="flex items-center gap-3 mb-3">
           <div class="w-9 h-9 rounded-full bg-violet flex items-center justify-center text-white font-semibold text-sm" id="sidebarAvatarText">A</div>
           <div class="flex-1 min-w-0">
-            <div class="text-sm font-semibold text-sidebar-text truncate">Admin</div>
+            <div class="text-sm font-semibold text-sidebar-text">Admin</div>
             <div class="text-xs text-sidebar-muted truncate" id="sidebarEmail">—</div>
           </div>
         </div>
@@ -151,7 +266,7 @@
       </div>
     </aside>
 
-    <!-- Main -->
+    <!-- Main content area -->
     <main class="flex-1 flex flex-col min-w-0">
       <header class="topbar h-16 flex items-center justify-between px-6 shrink-0">
         <div class="flex items-center gap-4">
@@ -169,7 +284,6 @@
             <input id="globalSearch" type="text" placeholder="Search users…" class="bg-transparent text-sm text-primary placeholder-secondary outline-none w-40"
               oninput="handleGlobalSearch(this.value)" />
           </div>
-          <!-- Live indicator -->
           <div class="flex items-center gap-1.5 bg-green-50 text-green-600 px-3 py-1.5 rounded-xl text-xs font-semibold border border-green-200">
             <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
             Live
@@ -178,19 +292,29 @@
         </div>
       </header>
 
-      <!-- Loading overlay -->
-      <div id="pageLoading" class="hidden absolute inset-0 bg-app flex items-center justify-center z-20">
-        <div class="text-center">
-          <div class="spinner mx-auto mb-3"></div>
-          <p class="text-secondary text-sm">Loading from Firebase…</p>
-        </div>
-      </div>
-
       <div id="pageContent" class="flex-1 overflow-y-auto p-6"></div>
     </main>
   </div>
 
+  <script>
+    // Expose UID helpers for inline buttons on setup screen
+    function copySetupUid() {
+      const uid = document.getElementById('setupUid').textContent;
+      navigator.clipboard.writeText(uid).then(() => showToast && showToast('UID copied!'));
+    }
+    // Also mirror uid into inline code block
+    const _origRender = window.renderSetupScreen;
+  </script>
   <script src="js/firebase-config.js"></script>
   <script src="js/app.js"></script>
+  <script>
+    // After app.js loads, mirror UID into the inline code block on setup screen
+    const _origRenderSetup = window.renderSetupScreen || function(){};
+    window.renderSetupScreen = function(user) {
+      _origRenderSetup(user);
+      const el = document.getElementById('setupUidInline');
+      if (el) el.textContent = user.uid;
+    };
+  </script>
 </body>
 </html>
