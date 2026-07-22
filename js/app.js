@@ -85,8 +85,38 @@ function toggleSidebar() {
   ov.classList.toggle('show', sidebarOpen);
 }
 
+// ── Back-button support via History API ───────────────────────
+// Intercept browser/Android back so it navigates between pages
+// instead of closing the app.
+window.addEventListener('popstate', (e) => {
+  const page = e.state?.page;
+  // Only handle popstate when the main app is visible
+  const mainApp = document.getElementById('mainApp');
+  if (!mainApp || mainApp.classList.contains('hidden')) return;
+  if (page && page !== currentPage) {
+    _navigateInternal(page); // navigate without pushing another history entry
+  } else {
+    // No previous page in history — stay on dashboard instead of closing
+    if (currentPage !== 'dashboard') {
+      history.pushState({ page: 'dashboard' }, '', '#dashboard');
+      _navigateInternal('dashboard');
+    } else {
+      // Already on dashboard: push a dummy entry so next back press stays here
+      history.pushState({ page: 'dashboard' }, '', '#dashboard');
+    }
+  }
+});
+
 // ── Navigation ────────────────────────────────────────────────
 async function navigate(page) {
+  // Push to browser history so back button works
+  if (page !== currentPage || location.hash !== '#' + page) {
+    history.pushState({ page }, '', '#' + page);
+  }
+  await _navigateInternal(page);
+}
+
+async function _navigateInternal(page) {
   currentPage = page;
   Object.values(charts).forEach(c => { try { c.destroy(); } catch(_) {} });
   charts = {};

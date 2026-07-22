@@ -103,6 +103,10 @@ function showScreen(screen, user) {
       break;
     case 'app':
       document.getElementById('mainApp').classList.remove('hidden');
+      // Seed two history entries so the very first back press goes to
+      // dashboard instead of closing the app.
+      history.replaceState({ page: 'dashboard' }, '', '#dashboard');
+      history.pushState({ page: 'dashboard' }, '', '#dashboard');
       navigate('dashboard');
       break;
   }
