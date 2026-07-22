@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  Firebase Configuration — Self Attendance Pro
+//  Firebase Configuration — Self Attendance Pro Admin Panel
 //  Project: selfattendance-42445
 // ═══════════════════════════════════════════════════════════════
 
@@ -13,137 +13,219 @@ const firebaseConfig = {
   appId:             "1:611062377939:android:c6a5659acd3433fdd21326"
 };
 
-// Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-// Firestore collection helpers
-const usersCol      = () => db.collection("users");
-const attendanceCol = (uid) => db.collection("attendance").document(uid).collection("days");
+// ── Global state ───────────────────────────────────────────────
+let currentAdmin     = null;
+let IS_ADMIN         = false;
+let ALL_USERS        = [];
+let ATTENDANCE_CACHE = {};
+let usersLoading     = false;
 
-// Auth state
-let currentAdmin = null;
-
-auth.onAuthStateChanged(user => {
+// ── Auth state ─────────────────────────────────────────────────
+auth.onAuthStateChanged(async (user) => {
   if (user) {
     currentAdmin = user;
-    // Update UI
-    const email = user.email || "";
-    const initials = email.charAt(0).toUpperCase();
-    const emailEl = document.getElementById('sidebarEmail');
-    const avatarEl = document.getElementById('topbarAvatar');
-    const sidebarAvEl = document.getElementById('sidebarAvatarText');
-    if (emailEl) emailEl.textContent = email;
-    if (avatarEl) avatarEl.textContent = initials;
-    if (sidebarAvEl) sidebarAvEl.textContent = initials;
-
-    // Show app
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('mainApp').classList.remove('hidden');
-    navigate('dashboard');
-    loadAllUsers();
+    updateHeaderUI(user);
+    await verifyAdminAccess(user);
   } else {
     currentAdmin = null;
-    document.getElementById('mainApp').classList.add('hidden');
-    document.getElementById('loginScreen').classList.remove('hidden');
+    IS_ADMIN     = false;
+    showScreen('login');
   }
-  setFirebaseStatus(!!user);
 });
 
-function setFirebaseStatus(connected) {
-  const el = document.getElementById('firebaseStatus');
-  if (!el) return;
-  if (connected) {
-    el.innerHTML = `<div class="w-2 h-2 rounded-full bg-green-400"></div><span class="text-secondary">Firebase connected</span>`;
-  } else {
-    el.innerHTML = `<div class="w-2 h-2 rounded-full bg-green-400"></div><span class="text-secondary">Ready — sign in to continue</span>`;
+// ── Admin verification ─────────────────────────────────────────
+// Checks Firestore adminSettings/adminConfig.adminUids[] for this UID.
+// This matches your existing isAdmin() security rule exactly.
+async function verifyAdminAccess(user) {
+  showScreen('loading');
+  try {
+    const snap = await db.doc('adminSettings/adminConfig').get();
+    if (!snap.exists) {
+      showScreen('setup', user);
+      return;
+    }
+    const adminUids = snap.data().adminUids || [];
+    if (adminUids.includes(user.uid)) {
+      IS_ADMIN = true;
+      showScreen('app');
+      loadAllUsers();
+    } else {
+      showScreen('notAdmin', user);
+    }
+  } catch (e) {
+    // permission-denied usually means the adminConfig doc doesn't exist
+    // (catch-all deny fires). Show setup screen.
+    if (e.code === 'permission-denied' || e.code === 'not-found') {
+      showScreen('setup', user);
+    } else {
+      alert('Firebase error during admin check: ' + e.message);
+      showScreen('login');
+    }
   }
 }
 
-// ── Global data store ──────────────────────────────────────────
-let ALL_USERS = [];
-let ATTENDANCE_CACHE = {};   // uid → [ Attendance records ]
-let usersLoading = false;
+// ── Screen controller ──────────────────────────────────────────
+function showScreen(screen, user) {
+  ['loginScreen','loadingScreen','setupScreen','notAdminScreen','mainApp']
+    .forEach(id => document.getElementById(id)?.classList.add('hidden'));
 
+  switch (screen) {
+    case 'login':
+      document.getElementById('loginScreen').classList.remove('hidden');
+      break;
+    case 'loading':
+      document.getElementById('loadingScreen').classList.remove('hidden');
+      break;
+    case 'setup':
+      populateSetupScreen(user);
+      document.getElementById('setupScreen').classList.remove('hidden');
+      break;
+    case 'notAdmin':
+      populateNotAdminScreen(user);
+      document.getElementById('notAdminScreen').classList.remove('hidden');
+      break;
+    case 'app':
+      document.getElementById('mainApp').classList.remove('hidden');
+      navigate('dashboard');
+      break;
+  }
+}
+
+function populateSetupScreen(user) {
+  ['setupEmail','setupEmail2'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = user.email || '—';
+  });
+  ['setupUid','setupUidInline','setupUidCopy'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = user.uid;
+  });
+}
+
+function populateNotAdminScreen(user) {
+  const emailEl = document.getElementById('naEmail');
+  const uidEl   = document.getElementById('naUid');
+  if (emailEl) emailEl.textContent = user.email || '—';
+  if (uidEl)   uidEl.textContent   = user.uid;
+}
+
+// ── Header UI ─────────────────────────────────────────────────
+function updateHeaderUI(user) {
+  const email    = user.email || '';
+  const initials = email.charAt(0).toUpperCase();
+  const ids = ['sidebarEmail','sidebarAvatarText','topbarAvatar'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'sidebarEmail') el.textContent = email;
+    else el.textContent = initials;
+  });
+}
+
+// ── Firestore reads ────────────────────────────────────────────
 async function loadAllUsers() {
   usersLoading = true;
   try {
-    const snap = await usersCol().orderBy("name").get();
+    const snap = await db.collection('users').orderBy('name').get();
     ALL_USERS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    document.getElementById('navUserCount').textContent = ALL_USERS.length;
-    // Refresh current page if it's users/dashboard/salary
+    const countEl = document.getElementById('navUserCount');
+    if (countEl) countEl.textContent = ALL_USERS.length;
     if (['dashboard','users','salary','analytics'].includes(currentPage)) {
       navigate(currentPage);
     }
   } catch (e) {
-    console.error("loadAllUsers:", e);
-    // If permission denied, show a helpful message
+    console.error('loadAllUsers:', e);
     if (e.code === 'permission-denied') {
-      showToast('Firestore rules restrict this account. Add Firestore rules for admin.', 'error');
+      showToast('Permission denied on users collection. Verify UID is in adminUids.', 'error');
     }
   } finally {
     usersLoading = false;
   }
 }
 
-// Load attendance for a single user (with caching)
+// Load one user's attendance for a given month (cached)
 async function loadAttendance(uid, yearMonth) {
   const key = `${uid}_${yearMonth}`;
   if (ATTENDANCE_CACHE[key]) return ATTENDANCE_CACHE[key];
-
   try {
-    const prefix = yearMonth; // "2025-07"
-    const snap = await db.collection("attendance").doc(uid).collection("days")
-      .where("date", ">=", prefix + "-01")
-      .where("date", "<=", prefix + "-31")
-      .orderBy("date", "desc")
+    const snap = await db.collection('attendance').doc(uid).collection('days')
+      .where('date', '>=', yearMonth + '-01')
+      .where('date', '<=', yearMonth + '-31')
+      .orderBy('date', 'desc')
       .get();
-
     const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     ATTENDANCE_CACHE[key] = records;
     return records;
-  } catch(e) {
-    console.error("loadAttendance:", uid, e);
+  } catch (e) {
+    // permission-denied = attendance rules missing || isAdmin() — expected until patch applied
+    if (e.code !== 'permission-denied') console.error('loadAttendance:', uid, e);
     return [];
   }
 }
 
-// Load ALL attendance for a user across months
 async function loadAllAttendance(uid) {
   const key = `${uid}_all`;
   if (ATTENDANCE_CACHE[key]) return ATTENDANCE_CACHE[key];
   try {
-    const snap = await db.collection("attendance").doc(uid).collection("days")
-      .orderBy("date","desc").limit(200).get();
+    const snap = await db.collection('attendance').doc(uid).collection('days')
+      .orderBy('date', 'desc').limit(200).get();
     const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     ATTENDANCE_CACHE[key] = records;
     return records;
-  } catch(e) {
-    console.error("loadAllAttendance:", e);
+  } catch (e) {
+    console.error('loadAllAttendance:', e);
     return [];
   }
 }
 
-// Current month string e.g. "2025-07"
 function currentYM() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
 }
 
 // ── Attendance CRUD ────────────────────────────────────────────
 async function saveAttendance(uid, date, status, workedHours, overtimeHours) {
-  await db.collection("attendance").doc(uid).collection("days").doc(date).set({
+  await db.collection('attendance').doc(uid).collection('days').doc(date).set({
     date, status,
-    workedHours: parseFloat(workedHours) || 0,
+    workedHours:   parseFloat(workedHours)   || 0,
     overtimeHours: parseFloat(overtimeHours) || 0,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
-  // Invalidate cache
   Object.keys(ATTENDANCE_CACHE).forEach(k => { if (k.startsWith(uid)) delete ATTENDANCE_CACHE[k]; });
 }
 
 async function deleteAttendance(uid, date) {
-  await db.collection("attendance").doc(uid).collection("days").doc(date).delete();
+  await db.collection('attendance').doc(uid).collection('days').doc(date).delete();
   Object.keys(ATTENDANCE_CACHE).forEach(k => { if (k.startsWith(uid)) delete ATTENDANCE_CACHE[k]; });
+}
+
+// ── Self-register helper ───────────────────────────────────────
+// Works only if Firestore rules are temporarily open or if adminConfig
+// already exists and you're already an admin (adding someone else).
+// Primary path is always the manual Firebase Console approach.
+async function selfRegisterAdmin() {
+  if (!currentAdmin) return;
+  try {
+    await db.doc('adminSettings/adminConfig').set({
+      adminUids: firebase.firestore.FieldValue.arrayUnion(currentAdmin.uid)
+    }, { merge: true });
+    showToast('UID added! Re-checking access…');
+    setTimeout(() => verifyAdminAccess(currentAdmin), 1500);
+  } catch (e) {
+    showToast(
+      'Auto-register blocked by Firestore rules (expected until you add the document manually). Use the Firebase Console steps above.',
+      'error'
+    );
+  }
+}
+
+// ── Copy helper used by setup screen buttons ───────────────────
+function copyUid() {
+  const uid = currentAdmin?.uid || '';
+  if (!uid) return;
+  navigator.clipboard.writeText(uid).then(() => showToast('UID copied!'));
 }
