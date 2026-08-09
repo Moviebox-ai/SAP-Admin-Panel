@@ -130,6 +130,7 @@ async function _navigateInternal(page) {
     users:      ['Users',           `${ALL_USERS.length} registered users`],
     attendance: ['Attendance',      'All attendance records'],
     salary:     ['Salary Reports',  'Salary breakdown'],
+    withdrawals:['Withdrawals',    'Review and process payout requests'],
     settings:   ['Settings & Rules','Admin configuration'],
   };
   const [title, sub] = titles[page] || ['Admin', ''];
@@ -278,9 +279,179 @@ async function buildPage(page) {
     case 'users':      return buildUsers();
     case 'attendance': return await buildAttendance();
     case 'salary':     return await buildSalary();
+    case 'withdrawals':return await buildWithdrawals();
     case 'settings':   return buildSettings();
     default:           return '<p>Page not found</p>';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  WITHDRAWAL REQUESTS
+// ═══════════════════════════════════════════════════════════════
+async function fetchWithdrawals() {
+  try {
+    return await db.collection('withdrawals').orderBy('createdAt', 'desc').limit(200).get();
+  } catch (_) {
+    // Keep older projects usable when some legacy documents have no
+    // createdAt field yet.
+    return await db.collection('withdrawals').limit(200).get();
+  }
+}
+
+function withdrawalDate(data) {
+  if (data.createdAt && typeof data.createdAt.toDate === 'function') return data.createdAt.toDate();
+  if (data.timestamp) return new Date(data.timestamp);
+  return null;
+}
+
+function withdrawalStatusClass(status) {
+  const value = String(status || 'Pending').toLowerCase();
+  return value.includes('approved') ? 'badge-present'
+    : value.includes('rejected') ? 'badge-absent'
+    : 'badge-half';
+}
+
+async function buildWithdrawals() {
+  const snap = await fetchWithdrawals();
+  const requests = snap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .sort((a, b) => (withdrawalDate(b)?.getTime() || 0) - (withdrawalDate(a)?.getTime() || 0));
+  const pending = requests.filter(request => {
+    const status = String(request.status || 'Pending').toLowerCase();
+    return !status.includes('approved') && !status.includes('rejected');
+  });
+
+  const countEl = document.getElementById('navWithdrawalCount');
+  if (countEl) countEl.textContent = pending.length;
+
+  return `
+  <div class="space-y-6">
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <h2 class="text-lg font-bold text-primary">Withdrawal Requests</h2>
+        <p class="text-secondary text-sm">Approve or reject payout requests submitted from the website.</p>
+      </div>
+      <button onclick="navigate('withdrawals')" class="btn-outline py-2 px-4 text-sm">↻ Refresh</button>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      ${statCard('Total Requests', requests.length, 'linear-gradient(135deg,#7C3AED,#A855F7)', ICONS.wallet, 'All time')}
+      ${statCard('Pending', pending.length, 'linear-gradient(135deg,#D97706,#FCD34D)', ICONS.clock, 'Needs action')}
+      ${statCard('Approved', requests.filter(r => String(r.status || '').toLowerCase().includes('approved')).length, 'linear-gradient(135deg,#059669,#34D399)', ICONS.check, 'Processed')}
+      ${statCard('Rejected', requests.filter(r => String(r.status || '').toLowerCase().includes('rejected')).length, 'linear-gradient(135deg,#DC2626,#FB7185)', ICONS.close, 'Declined')}
+    </div>
+    <div class="card overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left">
+          <thead><tr>
+            <th class="p-4 text-xs text-secondary">Request</th>
+            <th class="p-4 text-xs text-secondary">User</th>
+            <th class="p-4 text-xs text-secondary">Payment details</th>
+            <th class="p-4 text-xs text-secondary">Coins</th>
+            <th class="p-4 text-xs text-secondary">Payout</th>
+            <th class="p-4 text-xs text-secondary">Submitted</th>
+            <th class="p-4 text-xs text-secondary">Status</th>
+            <th class="p-4 text-xs text-secondary">Action</th>
+          </tr></thead>
+          <tbody>
+            ${requests.length ? requests.map(renderWithdrawalRow).join('') : `
+              <tr><td colspan="8">${emptyState('No withdrawal requests yet')}</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadWithdrawalCount() {
+  try {
+    const snap = await fetchWithdrawals();
+    const pending = snap.docs.filter(doc => {
+      const status = String(doc.data().status || 'Pending').toLowerCase();
+      return !status.includes('approved') && !status.includes('rejected');
+    });
+    const countEl = document.getElementById('navWithdrawalCount');
+    if (countEl) countEl.textContent = pending.length;
+  } catch (_) {
+    const countEl = document.getElementById('navWithdrawalCount');
+    if (countEl) countEl.textContent = '0';
+  }
+}
+
+function renderWithdrawalRow(request) {
+  const date = withdrawalDate(request);
+  const status = request.status || 'Pending';
+  const statusLower = String(status).toLowerCase();
+  const isPending = !statusLower.includes('approved') && !statusLower.includes('rejected');
+  const safeId = String(request.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `<tr class="border-t border-divider">
+    <td class="p-4"><strong class="text-violet">${request.reqId || safeId.slice(0, 8)}</strong></td>
+    <td class="p-4"><div class="font-semibold text-primary">${request.name || 'User'}</div><div class="text-secondary text-xs font-mono">${request.myId || '—'}</div></td>
+    <td class="p-4"><span class="text-sm text-primary">${request.methodDetails || request.method || '—'}</span></td>
+    <td class="p-4"><strong class="text-violet">${(Number(request.axCoins) || 0).toLocaleString()} AX</strong></td>
+    <td class="p-4"><strong class="text-green-500">₹${(Number(request.inrAmount) || 0).toFixed(2)}</strong></td>
+    <td class="p-4 text-secondary text-xs">${date ? date.toLocaleString() : '—'}</td>
+    <td class="p-4"><span class="badge ${withdrawalStatusClass(status)}">${status}</span></td>
+    <td class="p-4">${isPending ? `<div class="flex gap-2">
+      <button onclick="updateWithdrawalStatus('${safeId}', 'Approved')" class="btn-primary py-1.5 px-3 text-xs">Approve</button>
+      <button onclick="updateWithdrawalStatus('${safeId}', 'Rejected')" class="btn-danger py-1.5 px-3 text-xs">Reject</button>
+    </div>` : `<span class="text-secondary text-xs">Completed</span>`}</td>
+  </tr>`;
+}
+
+async function updateWithdrawalStatus(docId, nextStatus) {
+  const action = nextStatus === 'Approved' ? 'approve' : 'reject';
+  if (!confirm(`Are you sure you want to ${action} this withdrawal request?`)) return;
+
+  try {
+    const ref = db.collection('withdrawals').doc(docId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new Error('Withdrawal request not found.');
+    const request = snap.data();
+    const currentStatus = String(request.status || 'Pending').toLowerCase();
+    if (currentStatus.includes('approved') || currentStatus.includes('rejected')) {
+      showToast('This request has already been processed.', 'error');
+      return;
+    }
+
+    const update = {
+      status: nextStatus,
+      reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      reviewedBy: currentAdmin?.email || currentAdmin?.uid || 'admin'
+    };
+
+    // A rejected request returns the held coins once. Approved requests do
+    // not change the balance because the website already held the coins.
+    if (nextStatus === 'Rejected' && !request.coinsRefunded) {
+      const userRef = await findUserRef(request.myId);
+      if (userRef) {
+        const userSnap = await userRef.get();
+        const user = userSnap.data() || {};
+        const balance = Number(user.axCoins ?? user.coins ?? user.rewards?.coinBalance ?? 0);
+        await userRef.set({
+          userId: request.myId,
+          name: request.name || user.name || '',
+          axCoins: balance + (Number(request.axCoins) || 0),
+          lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        update.coinsRefunded = true;
+      }
+    }
+
+    await ref.update(update);
+    showToast(`Request ${nextStatus.toLowerCase()} successfully.`);
+    await navigate('withdrawals');
+  } catch (e) {
+    showToast('Could not update request: ' + e.message, 'error');
+  }
+}
+
+async function findUserRef(myId) {
+  if (!myId) return null;
+  const direct = db.collection('users').doc(String(myId));
+  const directSnap = await direct.get();
+  if (directSnap.exists) return direct;
+  const byUniqueId = await db.collection('users').where('uniqueId', '==', String(myId)).limit(1).get();
+  return byUniqueId.empty ? null : db.collection('users').doc(byUniqueId.docs[0].id);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1318,4 +1489,7 @@ const ICONS = {
   check:    `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
   calendar: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`,
   rupee:    `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`,
+  wallet:   `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7V5a2 2 0 0 0-2-2H5a3 3 0 0 0 0 6h15v10a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6"/><path d="M16 13h.01"/></svg>`,
+  clock:    `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>`,
+  close:    `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>`,
 };

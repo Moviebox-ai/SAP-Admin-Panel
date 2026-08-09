@@ -53,6 +53,7 @@ async function verifyAdminAccess(user) {
     IS_ADMIN = true;
     showScreen('app');
     loadAllUsers();
+    loadWithdrawalCount();
     return;
   }
 
@@ -68,6 +69,7 @@ async function verifyAdminAccess(user) {
       IS_ADMIN = true;
       showScreen('app');
       loadAllUsers();
+      loadWithdrawalCount();
     } else {
       showScreen('notAdmin', user);
     }
