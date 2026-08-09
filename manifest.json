@@ -1,0 +1,17 @@
+{
+  "name": "Self Attendance Pro Admin",
+  "short_name": "SAP Admin",
+  "description": "Admin Panel for Self Attendance Pro",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#181824",
+  "theme_color": "#6c5ce7",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
