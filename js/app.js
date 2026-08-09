@@ -1228,13 +1228,22 @@ async function saveUserProfile(uid) {
       standardHours,
       overtimeRate,
       axCoins: coins,
-      coins: coins
+      coins: coins,
+      // The Android app treats rewards.coinBalance as the AUTHORITATIVE
+      // balance on every sync (splash/login/dashboard) and only falls
+      // back to axCoins when the rewards map doesn't exist yet. Every
+      // real user already has a rewards map, so without this nested
+      // write the app silently ignores any coin edit made here — it
+      // keeps whatever coinBalance it last synced. set(...,{merge:true})
+      // deep-merges nested maps, so this only touches coinBalance and
+      // leaves totalCoinsEarned/spin metadata/etc. untouched.
+      rewards: { coinBalance: coins }
     };
 
-    // The `users/{uid}` doc's axCoins/coins fields are what THIS panel
-    // displays, but the live app spends/reads its real balance from
-    // users/{uid}/wallet/wallet.balance. Write both in one batch so the
-    // app's wallet actually reflects the coin change an admin makes here.
+    // The `users/{uid}` doc's axCoins/coins/rewards.coinBalance fields are
+    // what THIS panel and the app read, but the live app spends/reads its
+    // real balance from users/{uid}/wallet/wallet.balance too. Write all
+    // three mirrors in one batch so every surface reflects the change.
     const userRef   = db.collection('users').doc(uid);
     const walletRef = userRef.collection('wallet').doc('wallet');
 
