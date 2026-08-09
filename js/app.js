@@ -86,30 +86,21 @@ function toggleSidebar() {
 }
 
 // ── Back-button support via History API ───────────────────────
-// Intercept browser/Android back so it navigates between pages
-// instead of closing the app.
 window.addEventListener('popstate', (e) => {
-  const page = e.state?.page;
-  // Only handle popstate when the main app is visible
   const mainApp = document.getElementById('mainApp');
   if (!mainApp || mainApp.classList.contains('hidden')) return;
-  if (page && page !== currentPage) {
-    _navigateInternal(page); // navigate without pushing another history entry
-  } else {
-    // No previous page in history — stay on dashboard instead of closing
-    if (currentPage !== 'dashboard') {
-      history.pushState({ page: 'dashboard' }, '', '#dashboard');
-      _navigateInternal('dashboard');
-    } else {
-      // Already on dashboard: push a dummy entry so next back press stays here
-      history.pushState({ page: 'dashboard' }, '', '#dashboard');
-    }
+
+  const targetPage = e.state?.page || (location.hash ? location.hash.replace('#', '') : 'dashboard');
+  if (targetPage && targetPage !== currentPage) {
+    _navigateInternal(targetPage);
   }
 });
 
 // ── Navigation ────────────────────────────────────────────────
-async function navigate(page) {
-  // Push to browser history so back button works
+async function navigate(page, e) {
+  if (e) {
+    try { e.preventDefault(); } catch(_) {}
+  }
   if (page !== currentPage || location.hash !== '#' + page) {
     history.pushState({ page }, '', '#' + page);
   }
@@ -760,6 +751,7 @@ function usersTableRows(users) {
     <td onclick="event.stopPropagation()">
       <div class="flex gap-2">
         <button onclick="showUserDetail('${u.id}')" class="btn-outline py-1 px-3 text-xs">View</button>
+        <button onclick="openEditUserModal('${u.id}')" class="btn-primary py-1 px-3 text-xs">Edit</button>
         <button onclick="confirmDeleteUser('${u.id}','${(u.name||'').replace(/'/g,"\\'")}')" class="btn-danger py-1 px-3 text-xs">Delete</button>
       </div>
     </td>
@@ -794,7 +786,7 @@ function userCoinBalance(user) {
 async function refreshUsers() {
   ATTENDANCE_CACHE = {};
   await loadAllUsers();
-  if (currentPage === 'users') navigate('users');
+  if (currentPage === 'users') _navigateInternal('users');
   showToast('Users refreshed from Firebase!');
 }
 
@@ -905,11 +897,162 @@ async function showUserDetail(uid) {
       </div>` : ''}
 
       <div class="flex gap-3">
-        <button onclick="closeModal('userModal');navigate('attendance')" class="btn-outline flex-1">Go to Attendance</button>
-        <button onclick="closeModal('userModal')" class="btn-ghost flex-1">Close</button>
+        <button onclick="closeModal('userModal');openEditUserModal('${u.id}')" class="btn-primary flex-1">Edit User Data</button>
+        <button onclick="closeModal('userModal');_navigateInternal('attendance')" class="btn-outline flex-1">Go to Attendance</button>
+        <button onclick="closeModal('userModal')" class="btn-ghost py-2.5 px-4">Close</button>
       </div>`;
   } catch(e) {
     document.getElementById('userDetailBody').innerHTML = fbErrorBanner(e);
+  }
+}
+
+function openEditUserModal(uid) {
+  const u = ALL_USERS.find(x => x.id === uid);
+  if (!u) { showToast('User not found', 'error'); return; }
+
+  const coins = userCoinBalance(u) ?? 0;
+  const currencies = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SAR', 'SGD', 'MYR', 'CAD', 'AUD', 'PKR'];
+
+  const modal = openModal('editUserModal');
+  modal.innerHTML = `
+  <div class="modal max-w-lg">
+    <div class="flex items-center justify-between mb-5 border-b border-divider pb-3">
+      <div class="flex items-center gap-3">
+        ${avatar(u.name || '?')}
+        <div>
+          <h2 class="text-lg font-bold text-primary">Edit User Profile</h2>
+          <code class="text-xs text-secondary font-mono">${u.id}</code>
+        </div>
+      </div>
+      <button onclick="closeModal('editUserModal')" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+    </div>
+
+    <form id="editUserForm" onsubmit="event.preventDefault(); saveUserProfile('${u.id}');" class="space-y-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Full Name</label>
+          <input id="editName" type="text" value="${(u.name || '').replace(/"/g, '&quot;')}" placeholder="e.g. Rahul Sharma" class="input-field" required />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Email Address</label>
+          <input id="editEmail" type="email" value="${(u.email || '').replace(/"/g, '&quot;')}" placeholder="user@example.com" class="input-field" />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Unique ID</label>
+          <input id="editUniqueId" type="text" value="${(u.uniqueId || '').replace(/"/g, '&quot;')}" placeholder="e.g. 1001" class="input-field font-mono" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Coin Balance (🪙)</label>
+          <input id="editCoins" type="number" step="1" value="${coins}" placeholder="0" class="input-field" />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Monthly Salary</label>
+          <input id="editSalary" type="number" step="any" value="${u.monthlySalary || 0}" placeholder="30000" class="input-field" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Currency</label>
+          <select id="editCurrency" class="input-field">
+            ${currencies.map(c => `<option value="${c}" ${(u.currency || 'INR') === c ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Working Days</label>
+          <input id="editWorkingDays" type="number" min="1" max="31" value="${u.workingDays || 26}" class="input-field" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Std Hours/Day</label>
+          <input id="editStdHours" type="number" min="1" max="24" value="${u.standardHours || 8}" class="input-field" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-secondary mb-1">Overtime Rate</label>
+          <input id="editOTRate" type="number" step="0.1" value="${u.overtimeRate || 1.5}" class="input-field" />
+        </div>
+      </div>
+
+      <div id="editUserError" class="hidden text-red-500 text-xs bg-red-50 p-3 rounded-xl"></div>
+
+      <div class="flex gap-3 pt-3 border-t border-divider">
+        <button id="saveUserBtn" type="submit" class="btn-primary flex-1 py-2.5">
+          Save Changes
+        </button>
+        <button type="button" onclick="closeModal('editUserModal')" class="btn-ghost py-2.5 px-4">
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>`;
+}
+
+async function saveUserProfile(uid) {
+  const btn = document.getElementById('saveUserBtn');
+  const errEl = document.getElementById('editUserError');
+  errEl.classList.add('hidden');
+
+  const name          = document.getElementById('editName').value.trim();
+  const email         = document.getElementById('editEmail').value.trim();
+  const uniqueId      = document.getElementById('editUniqueId').value.trim();
+  const coins         = Number(document.getElementById('editCoins').value) || 0;
+  const monthlySalary = Number(document.getElementById('editSalary').value) || 0;
+  const currency      = document.getElementById('editCurrency').value || 'INR';
+  const workingDays   = Number(document.getElementById('editWorkingDays').value) || 26;
+  const standardHours = Number(document.getElementById('editStdHours').value) || 8;
+  const overtimeRate  = Number(document.getElementById('editOTRate').value) || 1.5;
+
+  if (!name) {
+    errEl.textContent = 'Name is required.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner spinner-sm"></div> Saving…';
+
+  try {
+    const updateData = {
+      name,
+      email,
+      uniqueId,
+      monthlySalary,
+      currency,
+      workingDays,
+      standardHours,
+      overtimeRate,
+      axCoins: coins,
+      coins: coins
+    };
+
+    await db.collection('users').doc(uid).set(updateData, { merge: true });
+
+    // Update in-memory ALL_USERS
+    const idx = ALL_USERS.findIndex(x => x.id === uid);
+    if (idx !== -1) {
+      ALL_USERS[idx] = { ...ALL_USERS[idx], ...updateData };
+    }
+
+    closeModal('editUserModal');
+    showToast('User profile updated successfully!');
+
+    // Refresh UI if on users page or other dependent views
+    if (currentPage === 'users') {
+      filterUsers();
+    } else if (['salary', 'dashboard', 'analytics'].includes(currentPage)) {
+      _navigateInternal(currentPage);
+    }
+  } catch(e) {
+    console.error('saveUserProfile error:', e);
+    btn.disabled = false;
+    btn.textContent = 'Save Changes';
+    errEl.textContent = 'Failed to save: ' + e.message;
+    errEl.classList.remove('hidden');
   }
 }
 
@@ -940,7 +1083,7 @@ async function deleteUserProfile(uid) {
     document.getElementById('navUserCount').textContent = ALL_USERS.length;
     closeModal('deleteModal');
     showToast('User profile deleted from Firestore');
-    navigate('users');
+    _navigateInternal('users');
   } catch(e) {
     showToast('Error: ' + e.message, 'error');
   }
@@ -1031,15 +1174,15 @@ async function buildAttendance() {
   </div>`;
 }
 
-async function changeAttUser(uid) { attSelectedUser = uid; navigate('attendance'); }
-async function changeAttMonth(ym) { attSelectedYM   = ym;  navigate('attendance'); }
+async function changeAttUser(uid) { attSelectedUser = uid; _navigateInternal('attendance'); }
+async function changeAttMonth(ym) { attSelectedYM   = ym;  _navigateInternal('attendance'); }
 
 function openAddAttendance() {
   const today = new Date().toISOString().slice(0, 10);
   openAttModal('Add Attendance Record', today, 'PRESENT', 8, 0, async (date, status, wh, oh) => {
     await saveAttendance(attSelectedUser, date, status, wh, oh);
     showToast('Saved to Firebase!');
-    navigate('attendance');
+    _navigateInternal('attendance');
   });
 }
 
@@ -1047,7 +1190,7 @@ function openEditAttendance(date, status, wh, oh) {
   openAttModal('Edit Record', date, status, wh, oh, async (_, newStatus, newWh, newOh) => {
     await saveAttendance(attSelectedUser, date, newStatus, newWh, newOh);
     showToast('Updated in Firebase!');
-    navigate('attendance');
+    _navigateInternal('attendance');
   });
 }
 
@@ -1128,7 +1271,7 @@ async function saveAttendanceForm() {
 function confirmDeleteAtt(date) {
   if (!confirm(`Delete attendance for ${formatDate(date)}?`)) return;
   deleteAttendance(attSelectedUser, date)
-    .then(() => { showToast('Record deleted'); navigate('attendance'); })
+    .then(() => { showToast('Record deleted'); _navigateInternal('attendance'); })
     .catch(e => showToast('Error: ' + e.message, 'error'));
 }
 

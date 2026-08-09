@@ -107,11 +107,9 @@ function showScreen(screen, user) {
       break;
     case 'app':
       document.getElementById('mainApp').classList.remove('hidden');
-      // Seed two history entries so the very first back press goes to
-      // dashboard instead of closing the app.
-      history.replaceState({ page: 'dashboard' }, '', '#dashboard');
-      history.pushState({ page: 'dashboard' }, '', '#dashboard');
-      navigate('dashboard');
+      const targetPage = (location.hash ? location.hash.replace('#', '') : '') || 'dashboard';
+      history.replaceState({ page: targetPage }, '', '#' + targetPage);
+      _navigateInternal(targetPage);
       break;
   }
 }
@@ -156,7 +154,7 @@ async function loadAllUsers() {
     const countEl = document.getElementById('navUserCount');
     if (countEl) countEl.textContent = ALL_USERS.length;
     if (['dashboard','users','salary','analytics'].includes(currentPage)) {
-      navigate(currentPage);
+      _navigateInternal(currentPage);
     }
   } catch (e) {
     console.error('loadAllUsers:', e);
@@ -178,7 +176,7 @@ function listenWithdrawals() {
       .onSnapshot(snap => {
         ALL_WITHDRAWALS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         updateWithdrawalBadge();
-        if (currentPage === 'withdrawals') navigate('withdrawals');
+        if (currentPage === 'withdrawals') _navigateInternal('withdrawals');
       }, err => {
         console.error('listenWithdrawals:', err);
         if (err.code === 'permission-denied') {
