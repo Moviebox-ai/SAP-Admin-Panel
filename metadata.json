@@ -1,0 +1,8 @@
+{
+  "name": "Self Attendance Pro Admin Panel",
+  "description": "Admin panel for Self Attendance Pro with user management, attendance tracking, salary reports, and payouts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
