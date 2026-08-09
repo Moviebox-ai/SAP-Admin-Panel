@@ -18,7 +18,7 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 // ── Admin emails — must match Firestore security rules isAdmin() ──
-const ADMIN_EMAILS = ['rohankumar53076@gmail.com'];
+const ADMIN_EMAILS = ['rohankumar53076@gmail.com', 'yogeshkumar53076@gmail.com'];
 
 // ── Global state ───────────────────────────────────────────────
 let currentAdmin     = null;
@@ -26,6 +26,8 @@ let IS_ADMIN         = false;
 let ALL_USERS        = [];
 let ATTENDANCE_CACHE = {};
 let usersLoading     = false;
+let ALL_WITHDRAWALS  = [];
+let withdrawalsUnsub = null;
 
 // ── Auth state ─────────────────────────────────────────────────
 auth.onAuthStateChanged(async (user) => {
@@ -53,7 +55,7 @@ async function verifyAdminAccess(user) {
     IS_ADMIN = true;
     showScreen('app');
     loadAllUsers();
-    loadWithdrawalCount();
+    listenWithdrawals();
     return;
   }
 
@@ -69,7 +71,7 @@ async function verifyAdminAccess(user) {
       IS_ADMIN = true;
       showScreen('app');
       loadAllUsers();
-      loadWithdrawalCount();
+      listenWithdrawals();
     } else {
       showScreen('notAdmin', user);
     }
@@ -164,6 +166,38 @@ async function loadAllUsers() {
   } finally {
     usersLoading = false;
   }
+}
+
+// ── Withdrawals: real-time listener ────────────────────────────
+// onSnapshot means new requests submitted from the website show up
+// here instantly, without needing a manual refresh.
+function listenWithdrawals() {
+  if (withdrawalsUnsub) return; // already listening
+  try {
+    withdrawalsUnsub = db.collection('withdrawals')
+      .onSnapshot(snap => {
+        ALL_WITHDRAWALS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateWithdrawalBadge();
+        if (currentPage === 'withdrawals') navigate('withdrawals');
+      }, err => {
+        console.error('listenWithdrawals:', err);
+        if (err.code === 'permission-denied') {
+          showToast('Permission denied on withdrawals collection. Check admin email / rules.', 'error');
+        }
+      });
+  } catch (e) {
+    console.error('listenWithdrawals setup:', e);
+  }
+}
+
+function updateWithdrawalBadge() {
+  const countEl = document.getElementById('navWithdrawalCount');
+  if (!countEl) return;
+  const pending = ALL_WITHDRAWALS.filter(w => {
+    const s = String(w.status || 'pending').toLowerCase();
+    return s !== 'completed' && s !== 'approved' && s !== 'rejected' && s !== 'cancelled';
+  }).length;
+  countEl.textContent = pending;
 }
 
 // Load one user's attendance for a given month (cached)

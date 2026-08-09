@@ -288,56 +288,49 @@ async function buildPage(page) {
 // ═══════════════════════════════════════════════════════════════
 //  WITHDRAWAL REQUESTS
 // ═══════════════════════════════════════════════════════════════
-async function fetchWithdrawals() {
-  try {
-    return await db.collection('withdrawals').orderBy('createdAt', 'desc').limit(200).get();
-  } catch (_) {
-    // Keep older projects usable when some legacy documents have no
-    // createdAt field yet.
-    return await db.collection('withdrawals').limit(200).get();
-  }
-}
-
-function withdrawalDate(data) {
-  if (data.createdAt && typeof data.createdAt.toDate === 'function') return data.createdAt.toDate();
-  if (data.timestamp) return new Date(data.timestamp);
-  return null;
-}
+// Status values match the Firestore rules enum: pending | completed |
+// rejected | cancelled. Coins are debited by the website itself when the
+// request is created (the signed-in user updates their own wallet, which
+// the rules allow). Admins can only update the `withdrawals` doc — the
+// rules deliberately do NOT let admin write users/{uid} — so on reject we
+// just flag the request; the coins are credited back automatically the
+// next time the user opens the website or app (see claimPendingRefunds /
+// RewardRepository.claimPendingRefunds), which read their own rejected
+// requests and refund themselves.
 
 function withdrawalStatusClass(status) {
-  const value = String(status || 'Pending').toLowerCase();
-  return value.includes('approved') ? 'badge-present'
-    : value.includes('rejected') ? 'badge-absent'
+  const value = String(status || 'pending').toLowerCase();
+  return (value === 'completed' || value === 'approved') ? 'badge-present'
+    : (value === 'rejected' || value === 'cancelled') ? 'badge-absent'
     : 'badge-half';
 }
 
-async function buildWithdrawals() {
-  const snap = await fetchWithdrawals();
-  const requests = snap.docs
-    .map(doc => ({ id: doc.id, ...doc.data() }))
-    .sort((a, b) => (withdrawalDate(b)?.getTime() || 0) - (withdrawalDate(a)?.getTime() || 0));
-  const pending = requests.filter(request => {
-    const status = String(request.status || 'Pending').toLowerCase();
-    return !status.includes('approved') && !status.includes('rejected');
-  });
+function isPendingStatus(status) {
+  const s = String(status || 'pending').toLowerCase();
+  return s !== 'completed' && s !== 'approved' && s !== 'rejected' && s !== 'cancelled';
+}
 
-  const countEl = document.getElementById('navWithdrawalCount');
-  if (countEl) countEl.textContent = pending.length;
+async function buildWithdrawals() {
+  const requests = [...ALL_WITHDRAWALS]
+    .sort((a, b) => (withdrawalDate(b)?.getTime() || 0) - (withdrawalDate(a)?.getTime() || 0));
+  const pending = requests.filter(r => isPendingStatus(r.status));
+
+  updateWithdrawalBadge();
 
   return `
   <div class="space-y-6">
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
         <h2 class="text-lg font-bold text-primary">Withdrawal Requests</h2>
-        <p class="text-secondary text-sm">Approve or reject payout requests submitted from the website.</p>
+        <p class="text-secondary text-sm">Approve or reject payout requests submitted from the website. Updates live.</p>
       </div>
       <button onclick="navigate('withdrawals')" class="btn-outline py-2 px-4 text-sm">↻ Refresh</button>
     </div>
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       ${statCard('Total Requests', requests.length, 'linear-gradient(135deg,#7C3AED,#A855F7)', ICONS.wallet, 'All time')}
       ${statCard('Pending', pending.length, 'linear-gradient(135deg,#D97706,#FCD34D)', ICONS.clock, 'Needs action')}
-      ${statCard('Approved', requests.filter(r => String(r.status || '').toLowerCase().includes('approved')).length, 'linear-gradient(135deg,#059669,#34D399)', ICONS.check, 'Processed')}
-      ${statCard('Rejected', requests.filter(r => String(r.status || '').toLowerCase().includes('rejected')).length, 'linear-gradient(135deg,#DC2626,#FB7185)', ICONS.close, 'Declined')}
+      ${statCard('Approved', requests.filter(r => ['completed','approved'].includes(String(r.status||'').toLowerCase())).length, 'linear-gradient(135deg,#059669,#34D399)', ICONS.check, 'Processed')}
+      ${statCard('Rejected', requests.filter(r => String(r.status||'').toLowerCase() === 'rejected').length, 'linear-gradient(135deg,#DC2626,#FB7185)', ICONS.close, 'Declined')}
     </div>
     <div class="card overflow-hidden">
       <div class="overflow-x-auto">
@@ -362,44 +355,40 @@ async function buildWithdrawals() {
   </div>`;
 }
 
-async function loadWithdrawalCount() {
-  try {
-    const snap = await fetchWithdrawals();
-    const pending = snap.docs.filter(doc => {
-      const status = String(doc.data().status || 'Pending').toLowerCase();
-      return !status.includes('approved') && !status.includes('rejected');
-    });
-    const countEl = document.getElementById('navWithdrawalCount');
-    if (countEl) countEl.textContent = pending.length;
-  } catch (_) {
-    const countEl = document.getElementById('navWithdrawalCount');
-    if (countEl) countEl.textContent = '0';
-  }
+function withdrawalDate(data) {
+  if (data.createdAt && typeof data.createdAt.toDate === 'function') return data.createdAt.toDate();
+  if (data.timestamp) return new Date(data.timestamp);
+  return null;
 }
 
 function renderWithdrawalRow(request) {
   const date = withdrawalDate(request);
-  const status = request.status || 'Pending';
-  const statusLower = String(status).toLowerCase();
-  const isPending = !statusLower.includes('approved') && !statusLower.includes('rejected');
+  const status = request.status || 'pending';
+  const pending = isPendingStatus(status);
   const safeId = String(request.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const coins = Number(request.amount ?? request.axCoins ?? 0);
   return `<tr class="border-t border-divider">
     <td class="p-4"><strong class="text-violet">${request.reqId || safeId.slice(0, 8)}</strong></td>
-    <td class="p-4"><div class="font-semibold text-primary">${request.name || 'User'}</div><div class="text-secondary text-xs font-mono">${request.myId || '—'}</div></td>
+    <td class="p-4"><div class="font-semibold text-primary">${request.name || 'User'}</div><div class="text-secondary text-xs font-mono">${request.uniqueId || request.myId || '—'}</div></td>
     <td class="p-4"><span class="text-sm text-primary">${request.methodDetails || request.method || '—'}</span></td>
-    <td class="p-4"><strong class="text-violet">${(Number(request.axCoins) || 0).toLocaleString()} AX</strong></td>
-    <td class="p-4"><strong class="text-green-500">₹${(Number(request.inrAmount) || 0).toFixed(2)}</strong></td>
+    <td class="p-4"><strong class="text-violet">${coins.toLocaleString()} AX</strong></td>
+    <td class="p-4"><strong class="text-green-500">₹${(Number(request.inrAmount) || (coins / 100)).toFixed(2)}</strong></td>
     <td class="p-4 text-secondary text-xs">${date ? date.toLocaleString() : '—'}</td>
     <td class="p-4"><span class="badge ${withdrawalStatusClass(status)}">${status}</span></td>
-    <td class="p-4">${isPending ? `<div class="flex gap-2">
-      <button onclick="updateWithdrawalStatus('${safeId}', 'Approved')" class="btn-primary py-1.5 px-3 text-xs">Approve</button>
-      <button onclick="updateWithdrawalStatus('${safeId}', 'Rejected')" class="btn-danger py-1.5 px-3 text-xs">Reject</button>
-    </div>` : `<span class="text-secondary text-xs">Completed</span>`}</td>
+    <td class="p-4">${pending ? `<div class="flex gap-2">
+      <button onclick="updateWithdrawalStatus('${safeId}', 'completed')" class="btn-primary py-1.5 px-3 text-xs">Approve</button>
+      <button onclick="promptRejectWithdrawal('${safeId}')" class="btn-danger py-1.5 px-3 text-xs">Reject</button>
+    </div>` : `<span class="text-secondary text-xs">${status === 'rejected' ? 'Refunded on next sign-in' : 'Done'}</span>`}</td>
   </tr>`;
 }
 
-async function updateWithdrawalStatus(docId, nextStatus) {
-  const action = nextStatus === 'Approved' ? 'approve' : 'reject';
+function promptRejectWithdrawal(docId) {
+  const reason = prompt('Reason for rejecting this request? (shown to the user, optional)') || '';
+  updateWithdrawalStatus(docId, 'rejected', reason);
+}
+
+async function updateWithdrawalStatus(docId, nextStatus, reason) {
+  const action = nextStatus === 'completed' ? 'approve' : 'reject';
   if (!confirm(`Are you sure you want to ${action} this withdrawal request?`)) return;
 
   try {
@@ -407,8 +396,7 @@ async function updateWithdrawalStatus(docId, nextStatus) {
     const snap = await ref.get();
     if (!snap.exists) throw new Error('Withdrawal request not found.');
     const request = snap.data();
-    const currentStatus = String(request.status || 'Pending').toLowerCase();
-    if (currentStatus.includes('approved') || currentStatus.includes('rejected')) {
+    if (!isPendingStatus(request.status)) {
       showToast('This request has already been processed.', 'error');
       return;
     }
@@ -418,42 +406,19 @@ async function updateWithdrawalStatus(docId, nextStatus) {
       reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
       reviewedBy: currentAdmin?.email || currentAdmin?.uid || 'admin'
     };
+    if (nextStatus === 'rejected') update.rejectReason = reason || '';
 
-    // A rejected request returns the held coins once. Approved requests do
-    // not change the balance because the website already held the coins.
-    if (nextStatus === 'Rejected' && !request.coinsRefunded) {
-      const userRef = await findUserRef(request.myId);
-      if (userRef) {
-        const userSnap = await userRef.get();
-        const user = userSnap.data() || {};
-        const balance = userCoinBalance(user);
-        const refundedBalance = balance + (Number(request.axCoins) || 0);
-        await userRef.set({
-          userId: request.myId,
-          name: request.name || user.name || '',
-          axCoins: refundedBalance,
-          lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        await userRef.update({ 'rewards.coinBalance': refundedBalance });
-        update.coinsRefunded = true;
-      }
-    }
-
+    // NOTE: admins cannot write users/{uid} under the current Firestore
+    // rules (only the account owner can) — so we do NOT try to refund
+    // coins here. The user's own wallet is credited back automatically
+    // the next time they sign in to the website or open the app, via
+    // claimPendingRefunds() / RewardRepository, which read their own
+    // rejected requests and self-refund.
     await ref.update(update);
-    showToast(`Request ${nextStatus.toLowerCase()} successfully.`);
-    await navigate('withdrawals');
+    showToast(`Request ${nextStatus} successfully.${nextStatus === 'rejected' ? ' Coins will return to the user automatically.' : ''}`);
   } catch (e) {
     showToast('Could not update request: ' + e.message, 'error');
   }
-}
-
-async function findUserRef(myId) {
-  if (!myId) return null;
-  const direct = db.collection('users').doc(String(myId));
-  const directSnap = await direct.get();
-  if (directSnap.exists) return direct;
-  const byUniqueId = await db.collection('users').where('uniqueId', '==', String(myId)).limit(1).get();
-  return byUniqueId.empty ? null : db.collection('users').doc(byUniqueId.docs[0].id);
 }
 
 // ═══════════════════════════════════════════════════════════════
