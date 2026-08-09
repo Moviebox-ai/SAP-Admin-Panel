@@ -426,13 +426,15 @@ async function updateWithdrawalStatus(docId, nextStatus) {
       if (userRef) {
         const userSnap = await userRef.get();
         const user = userSnap.data() || {};
-        const balance = Number(user.axCoins ?? user.coins ?? user.rewards?.coinBalance ?? 0);
+        const balance = userCoinBalance(user);
+        const refundedBalance = balance + (Number(request.axCoins) || 0);
         await userRef.set({
           userId: request.myId,
           name: request.name || user.name || '',
-          axCoins: balance + (Number(request.axCoins) || 0),
+          axCoins: refundedBalance,
           lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
+        await userRef.update({ 'rewards.coinBalance': refundedBalance });
         update.coinsRefunded = true;
       }
     }
@@ -691,7 +693,7 @@ function buildAnalytics() {
                 <td class="font-semibold">${u.monthlySalary ? fmtINR(u.monthlySalary, u.currency) : '—'}</td>
                 <td>${u.workingDays || '—'}</td>
                 <td>${u.standardHours ? u.standardHours + 'h' : '—'}</td>
-                <td>${u.rewards?.coinBalance != null ? `<span class="coin-badge">🪙 ${u.rewards.coinBalance}</span>` : '—'}</td>
+                <td>${userCoinBalance(u) != null ? `<span class="coin-badge">🪙 ${userCoinBalance(u)}</span>` : '—'}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -789,7 +791,7 @@ function usersTableRows(users) {
     <td><code class="text-violet font-mono text-sm bg-soft-surface px-2 py-0.5 rounded-lg">#${u.uniqueId || '—'}</code></td>
     <td class="font-semibold">${u.monthlySalary ? fmtINR(u.monthlySalary, u.currency) : '—'}</td>
     <td>${u.workingDays ? u.workingDays + ' days' : '—'}</td>
-    <td>${u.rewards?.coinBalance != null ? `<span class="coin-badge">🪙 ${u.rewards.coinBalance}</span>` : '—'}</td>
+    <td>${userCoinBalance(u) != null ? `<span class="coin-badge">🪙 ${userCoinBalance(u)}</span>` : '—'}</td>
     <td onclick="event.stopPropagation()">
       <div class="flex gap-2">
         <button onclick="showUserDetail('${u.id}')" class="btn-outline py-1 px-3 text-xs">View</button>
@@ -819,6 +821,11 @@ function filterUsers() {
   document.getElementById('userCount').textContent = `${filtered.length} of ${ALL_USERS.length} users`;
 }
 
+function userCoinBalance(user) {
+  const value = user?.axCoins ?? user?.coins ?? user?.rewards?.coinBalance;
+  return value == null ? null : Number(value);
+}
+
 async function refreshUsers() {
   ATTENDANCE_CACHE = {};
   await loadAllUsers();
@@ -830,7 +837,7 @@ function exportUsersCSV() {
   const rows = ALL_USERS.map(u => [
     u.name || '', u.id, u.uniqueId || '', u.email || '',
     u.monthlySalary || 0, u.workingDays || 0, u.standardHours || 0,
-    u.overtimeRate || 0, u.rewards?.coinBalance || 0,
+    u.overtimeRate || 0, userCoinBalance(u) || 0,
   ]);
   const csv = [['Name','UID','UniqueID','Email','Salary','WorkingDays','StdHours','OvertimeRate','Coins'], ...rows]
     .map(r => r.join(',')).join('\n');
@@ -874,7 +881,7 @@ async function showUserDetail(uid) {
         ${miniStat('Working Days',   u.workingDays ? u.workingDays + ' days' : 'Not set')}
         ${miniStat('Std Hours',      u.standardHours ? u.standardHours + 'h/day' : 'Not set')}
         ${miniStat('Overtime Rate',  u.overtimeRate ? u.overtimeRate + 'x' : '—')}
-        ${miniStat('Coin Balance',   u.rewards?.coinBalance != null ? '🪙 ' + u.rewards.coinBalance : '—')}
+        ${miniStat('Coin Balance',   userCoinBalance(u) != null ? '🪙 ' + userCoinBalance(u) : '—')}
       </div>
 
       ${u.rewards ? `
