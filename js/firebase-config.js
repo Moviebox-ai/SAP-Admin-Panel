@@ -166,6 +166,70 @@ async function loadAllUsers() {
   }
 }
 
+let knownWithdrawalDocIds = null;
+
+function playNotificationSound() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    // Play dual-tone alert chime
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.5);
+  } catch(e) { console.log('Audio chime error:', e); }
+}
+
+function triggerWithdrawalAlert(req) {
+  playNotificationSound();
+
+  // Desktop/Browser Push Notification
+  if (window.Notification && Notification.permission === 'granted') {
+    try {
+      const coins = Number(req.amount ?? req.axCoins ?? 0);
+      const inr = (Number(req.inrAmount) || (coins / 100)).toFixed(2);
+      new Notification('🔔 New Withdrawal Request!', {
+        body: `${req.name || 'User'} requested ${coins.toLocaleString()} Coins (₹${inr})`,
+        icon: '/icon.svg'
+      });
+    } catch(e) { console.error('Push notification error:', e); }
+  }
+
+  // In-App Banner
+  const coins = Number(req.amount ?? req.axCoins ?? 0);
+  const inr = (Number(req.inrAmount) || (coins / 100)).toFixed(2);
+  
+  const alertEl = document.createElement('div');
+  alertEl.style.cssText = `position:fixed;top:20px;right:20px;z-index:10000;background:#6c5ce7;color:white;padding:16px 20px;border-radius:16px;box-shadow:0 12px 32px rgba(108,92,231,0.4);border:2px solid #a29bfe;max-width:380px;font-family:Inter,sans-serif;`;
+  alertEl.innerHTML = `
+    <div class="flex items-start justify-between gap-3 mb-2">
+      <div class="flex items-center gap-2">
+        <span class="text-xl">🔔</span>
+        <strong class="text-sm font-bold">New Withdrawal Request!</strong>
+      </div>
+      <button onclick="this.parentElement.parentElement.remove()" class="text-white/80 hover:text-white text-lg leading-none">&times;</button>
+    </div>
+    <div class="text-xs text-white/90 mb-3">
+      <strong>${req.name || 'User'}</strong> (#${req.uniqueId || req.myId || '—'}) requested <strong>${coins.toLocaleString()} Coins (₹${inr})</strong>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="this.parentElement.parentElement.remove();_navigateInternal('withdrawals')" class="bg-white text-violet hover:bg-slate-100 text-xs py-1.5 px-3 font-bold rounded-lg flex-1">View Request →</button>
+      <button onclick="this.parentElement.parentElement.remove()" class="text-xs text-white/80 hover:text-white px-2">Dismiss</button>
+    </div>
+  `;
+  document.body.appendChild(alertEl);
+  setTimeout(() => { if (alertEl.parentNode) alertEl.remove(); }, 12000);
+}
+
 // ── Withdrawals: real-time listener ────────────────────────────
 // onSnapshot means new requests submitted from the website show up
 // here instantly, without needing a manual refresh.
@@ -174,7 +238,23 @@ function listenWithdrawals() {
   try {
     withdrawalsUnsub = db.collection('withdrawals')
       .onSnapshot(snap => {
-        ALL_WITHDRAWALS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const newDocs = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        if (knownWithdrawalDocIds !== null) {
+          snap.docChanges().forEach(change => {
+            if (change.type === 'added') {
+              const req = { id: change.doc.id, ...change.doc.data() };
+              const s = String(req.status || 'pending').toLowerCase();
+              if (s !== 'completed' && s !== 'approved' && s !== 'rejected' && s !== 'cancelled') {
+                triggerWithdrawalAlert(req);
+              }
+            }
+          });
+        } else {
+          knownWithdrawalDocIds = new Set(newDocs.map(w => w.id));
+        }
+
+        ALL_WITHDRAWALS = newDocs;
         updateWithdrawalBadge();
         if (currentPage === 'withdrawals') _navigateInternal('withdrawals');
       }, err => {

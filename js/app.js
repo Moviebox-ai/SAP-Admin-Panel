@@ -313,9 +313,17 @@ async function buildWithdrawals() {
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
         <h2 class="text-lg font-bold text-primary">Withdrawal Requests</h2>
-        <p class="text-secondary text-sm">Approve or reject payout requests submitted from the website. Updates live.</p>
+        <p class="text-secondary text-sm">Approve or reject payout requests submitted from the website. Real-time alerts & anti-fraud status enabled.</p>
       </div>
-      <button onclick="navigate('withdrawals')" class="btn-outline py-2 px-4 text-sm">↻ Refresh</button>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button onclick="requestNotificationPermission()" class="btn-outline py-2 px-3 text-xs flex items-center gap-1.5">
+          <span>🔔</span> Enable Push Alerts
+        </button>
+        <button onclick="playNotificationSound()" class="btn-ghost py-2 px-3 text-xs">
+          🔊 Test Sound
+        </button>
+        <button onclick="_navigateInternal('withdrawals')" class="btn-outline py-2 px-3 text-xs">↻ Refresh</button>
+      </div>
     </div>
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       ${statCard('Total Requests', requests.length, 'linear-gradient(135deg,#7C3AED,#A855F7)', ICONS.wallet, 'All time')}
@@ -358,16 +366,32 @@ function renderWithdrawalRow(request) {
   const pending = isPendingStatus(status);
   const safeId = String(request.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const coins = Number(request.amount ?? request.axCoins ?? 0);
-  return `<tr class="border-t border-divider">
+
+  const user = ALL_USERS.find(u => u.id === request.userId || u.id === request.uid || (u.uniqueId && String(u.uniqueId) === String(request.uniqueId || request.myId)));
+
+  let fraudBadge = '';
+  if (user) {
+    fraudBadge = getUserQuickFraudBadge(user);
+  } else if (coins > 5000) {
+    fraudBadge = `<span class="badge badge-absent text-xs font-semibold">⚠️ High Request</span>`;
+  }
+
+  return `<tr class="border-t border-divider hover:bg-soft-surface transition-colors">
     <td class="p-4"><strong class="text-violet">${request.reqId || safeId.slice(0, 8)}</strong></td>
-    <td class="p-4"><div class="font-semibold text-primary">${request.name || 'User'}</div><div class="text-secondary text-xs font-mono">${request.uniqueId || request.myId || '—'}</div></td>
-    <td class="p-4"><span class="text-sm text-primary">${request.methodDetails || request.method || '—'}</span></td>
+    <td class="p-4">
+      <div class="flex items-center gap-2">
+        <div class="font-semibold text-primary ${user ? 'cursor-pointer hover:underline text-violet' : ''}" onclick="${user ? `showUserDetail('${user.id}')` : ''}">${request.name || 'User'}</div>
+        ${fraudBadge}
+      </div>
+      <div class="text-secondary text-xs font-mono">#${request.uniqueId || request.myId || '—'}</div>
+    </td>
+    <td class="p-4"><span class="text-sm text-primary font-medium">${request.methodDetails || request.method || '—'}</span></td>
     <td class="p-4"><strong class="text-violet">${coins.toLocaleString()} AX</strong></td>
     <td class="p-4"><strong class="text-green-500">₹${(Number(request.inrAmount) || (coins / 100)).toFixed(2)}</strong></td>
     <td class="p-4 text-secondary text-xs">${date ? date.toLocaleString() : '—'}</td>
     <td class="p-4"><span class="badge ${withdrawalStatusClass(status)}">${status}</span></td>
     <td class="p-4">${pending ? `<div class="flex gap-2">
-      <button onclick="updateWithdrawalStatus('${safeId}', 'completed')" class="btn-primary py-1.5 px-3 text-xs">Approve</button>
+      <button onclick="updateWithdrawalStatus('${safeId}', 'completed')" class="btn-primary py-1.5 px-3 text-xs shadow-sm">Approve</button>
       <button onclick="promptRejectWithdrawal('${safeId}')" class="btn-danger py-1.5 px-3 text-xs">Reject</button>
     </div>` : `<span class="text-secondary text-xs">${status === 'rejected' ? 'Refunded on next sign-in' : 'Done'}</span>`}</td>
   </tr>`;
@@ -697,6 +721,34 @@ function initAnalyticsCharts() {
 // ═══════════════════════════════════════════════════════════════
 //  USERS
 // ═══════════════════════════════════════════════════════════════
+function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    showToast('Browser does not support desktop notifications.', 'error');
+    return;
+  }
+  Notification.requestPermission().then(permission => {
+    if (permission === 'granted') {
+      showToast('Push Notifications enabled! You will get live alerts for new withdrawal requests.');
+      playNotificationSound();
+    } else {
+      showToast('Notification permission denied.', 'error');
+    }
+  });
+}
+
+function getUserQuickFraudBadge(u) {
+  const coins = userCoinBalance(u) ?? 0;
+  const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && x.uniqueId === u.uniqueId).length : 0;
+  
+  if (coins < 0 || dupes > 0 || coins > 25000) {
+    return `<span class="badge badge-absent text-xs font-semibold">🔴 High Risk</span>`;
+  }
+  if (coins > 5000) {
+    return `<span class="badge badge-half text-xs font-semibold">🟡 Suspicious</span>`;
+  }
+  return `<span class="badge badge-present text-xs font-semibold">🟢 Safe</span>`;
+}
+
 function buildUsers() {
   return `
   <div class="space-y-4">
@@ -710,6 +762,12 @@ function buildUsers() {
         <option value="high">Above ₹60k</option>
         <option value="none">Not Set</option>
       </select>
+      <select id="riskFilter" onchange="filterUsers()" class="py-2.5">
+        <option value="">All Security Status</option>
+        <option value="safe">🟢 Verified Safe</option>
+        <option value="suspicious">🟡 Suspicious Balance</option>
+        <option value="highrisk">🔴 High Risk / Anomaly</option>
+      </select>
       <button onclick="refreshUsers()" class="btn-primary py-2.5 px-5">↻ Refresh</button>
       <button onclick="exportUsersCSV()" class="btn-outline py-2.5 px-4">Export CSV</button>
     </div>
@@ -718,7 +776,7 @@ function buildUsers() {
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>User</th><th>Firebase UID</th><th>Unique ID</th><th>Monthly Salary</th><th>Working Days</th><th>Coins</th><th>Actions</th></tr>
+            <tr><th>User</th><th>Firebase UID</th><th>Unique ID</th><th>Monthly Salary</th><th>Coins</th><th>Anti-Fraud Risk</th><th>Actions</th></tr>
           </thead>
           <tbody id="usersTbody">${usersTableRows(ALL_USERS)}</tbody>
         </table>
@@ -733,7 +791,7 @@ function buildUsers() {
 function usersTableRows(users) {
   if (!users.length) return `<tr><td colspan="7">${emptyState('No users found')}</td></tr>`;
   return users.map(u => `
-  <tr onclick="showUserDetail('${u.id}')" class="cursor-pointer">
+  <tr onclick="showUserDetail('${u.id}')" class="cursor-pointer hover:bg-soft-surface transition-colors">
     <td>
       <div class="flex items-center gap-3">
         ${avatar(u.name || '?')}
@@ -746,8 +804,8 @@ function usersTableRows(users) {
     <td><code class="text-xs text-secondary font-mono">${u.id.slice(0,14)}…</code></td>
     <td><code class="text-violet font-mono text-sm bg-soft-surface px-2 py-0.5 rounded-lg">#${u.uniqueId || '—'}</code></td>
     <td class="font-semibold">${u.monthlySalary ? fmtINR(u.monthlySalary, u.currency) : '—'}</td>
-    <td>${u.workingDays ? u.workingDays + ' days' : '—'}</td>
-    <td>${userCoinBalance(u) != null ? `<span class="coin-badge">🪙 ${userCoinBalance(u)}</span>` : '—'}</td>
+    <td>${userCoinBalance(u) != null ? `<span class="coin-badge">🪙 ${(userCoinBalance(u) || 0).toLocaleString()}</span>` : '—'}</td>
+    <td>${getUserQuickFraudBadge(u)}</td>
     <td onclick="event.stopPropagation()">
       <div class="flex gap-2">
         <button onclick="showUserDetail('${u.id}')" class="btn-outline py-1 px-3 text-xs">View</button>
@@ -761,6 +819,8 @@ function usersTableRows(users) {
 function filterUsers() {
   const q  = (document.getElementById('userSearch')?.value || '').toLowerCase();
   const sf = document.getElementById('salaryFilter')?.value || '';
+  const rf = document.getElementById('riskFilter')?.value || '';
+
   const filtered = ALL_USERS.filter(u => {
     const matchQ = !q ||
       (u.name     || '').toLowerCase().includes(q) ||
@@ -772,7 +832,16 @@ function filterUsers() {
     if (sf === 'mid')  matchS = (u.monthlySalary || 0) >= 30000 && (u.monthlySalary || 0) < 60000;
     if (sf === 'high') matchS = (u.monthlySalary || 0) >= 60000;
     if (sf === 'none') matchS = !u.monthlySalary || u.monthlySalary === 0;
-    return matchQ && matchS;
+
+    let matchR = true;
+    const coins = userCoinBalance(u) ?? 0;
+    const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && x.uniqueId === u.uniqueId).length : 0;
+    
+    if (rf === 'highrisk') matchR = coins < 0 || dupes > 0 || coins > 25000;
+    if (rf === 'suspicious') matchR = coins > 5000 && coins <= 25000 && dupes === 0;
+    if (rf === 'safe') matchR = coins >= 0 && coins <= 5000 && dupes === 0;
+
+    return matchQ && matchS && matchR;
   });
   document.getElementById('usersTbody').innerHTML = usersTableRows(filtered);
   document.getElementById('userCount').textContent = `${filtered.length} of ${ALL_USERS.length} users`;
@@ -802,6 +871,121 @@ function exportUsersCSV() {
   showToast('Users CSV exported!');
 }
 
+async function computeUserFraudAudit(u, records = []) {
+  const uid = u.id;
+
+  // 1. Attendance coins
+  const presentDays = records.filter(r => r.status === 'PRESENT').length;
+  const halfDays    = records.filter(r => r.status === 'HALF' || r.status === 'HALF_DAY').length;
+  const otHours     = records.reduce((s, r) => s + (Number(r.overtimeHours) || 0), 0);
+  const attCoins    = (presentDays * 100) + (halfDays * 50) + (otHours * 20);
+
+  // 2. Referrals
+  let refCount = 0;
+  try {
+    const refSnap = await db.collection('referrals').doc(uid).get();
+    if (refSnap.exists) {
+      const d = refSnap.data();
+      refCount = (d.referredUsers ? d.referredUsers.length : 0) || (d.count || 0);
+    }
+  } catch(e) { /* ignore */ }
+  const referralCoins = refCount * 500;
+
+  // 3. Rewards
+  const rewardsCoins = u.rewards?.totalCoinsEarned || 0;
+
+  // 4. Withdrawals
+  const userWithdrawals = ALL_WITHDRAWALS.filter(w => 
+    w.userId === uid || w.uid === uid || (u.uniqueId && String(w.uniqueId || w.myId) === String(u.uniqueId))
+  );
+  const totalWithdrawn = userWithdrawals.reduce((s, w) => s + Number(w.amount ?? w.axCoins ?? 0), 0);
+  const pendingCount   = userWithdrawals.filter(w => isPendingStatus(w.status)).length;
+
+  // 5. Total lifetime & estimated
+  const currentCoins        = userCoinBalance(u) ?? 0;
+  const totalLifetimeCoins  = currentCoins + totalWithdrawn;
+  const estimatedLegitCoins = attCoins + referralCoins + rewardsCoins;
+  const discrepancy         = totalLifetimeCoins - estimatedLegitCoins;
+
+  // 6. Security & Fraud Risk Analysis
+  const flags = [];
+  let riskLevel = 'SAFE'; // 'SAFE' | 'WARNING' | 'HIGH_RISK'
+
+  if (currentCoins < 0) {
+    riskLevel = 'HIGH_RISK';
+    flags.push(`🔴 Negative coin balance (${currentCoins} AX). Invalid state.`);
+  }
+
+  if (discrepancy > 3000) {
+    riskLevel = 'HIGH_RISK';
+    flags.push(`⚠️ Excessive coin balance mismatch: +${discrepancy.toLocaleString()} AX above estimated legitimate activity (Attendance: ${attCoins}, Referrals: ${referralCoins}, Rewards: ${rewardsCoins}). Possible balance tamper.`);
+  } else if (discrepancy > 1000) {
+    if (riskLevel !== 'HIGH_RISK') riskLevel = 'WARNING';
+    flags.push(`⚠️ Balance is ${discrepancy.toLocaleString()} AX higher than recorded activity logs.`);
+  }
+
+  // Check max single-day hours/overtime
+  const invalidDay = records.find(r => (Number(r.overtimeHours) || 0) > 12 || (Number(r.workedHours) || 0) > 20);
+  if (invalidDay) {
+    riskLevel = 'HIGH_RISK';
+    flags.push(`⛔ Impossible working/OT hours on ${formatDate(invalidDay.date)} (${invalidDay.workedHours || 0}h worked, ${invalidDay.overtimeHours || 0}h OT).`);
+  }
+
+  // Check duplicate uniqueId
+  if (u.uniqueId) {
+    const dupes = ALL_USERS.filter(x => x.id !== uid && x.uniqueId === u.uniqueId);
+    if (dupes.length > 0) {
+      riskLevel = 'HIGH_RISK';
+      flags.push(`⛔ Duplicate Unique ID #${u.uniqueId} shared with ${dupes.length} other profile(s). Multi-account risk.`);
+    }
+  }
+
+  if (pendingCount > 3) {
+    riskLevel = 'HIGH_RISK';
+    flags.push(`⚠️ Spam risk: ${pendingCount} concurrent pending withdrawal requests.`);
+  }
+
+  return {
+    riskLevel,
+    flags,
+    attCoins,
+    refCount,
+    referralCoins,
+    rewardsCoins,
+    totalWithdrawn,
+    currentCoins,
+    totalLifetimeCoins,
+    estimatedLegitCoins,
+    discrepancy,
+    userWithdrawals,
+    pendingCount
+  };
+}
+
+async function toggleBanUser(uid) {
+  const u = ALL_USERS.find(x => x.id === uid);
+  const name = u?.name || uid;
+  const reason = prompt(`Reason for Banning / Freezing account ${name}?`, 'Suspicious Coin Activity / Fraud Prevention');
+  if (!reason) return;
+
+  try {
+    await db.collection('bannedUsers').doc(uid).set({
+      uid: uid,
+      name: name,
+      uniqueId: u?.uniqueId || '—',
+      email: u?.email || '—',
+      reason: reason,
+      bannedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      bannedBy: currentAdmin?.email || 'admin'
+    });
+    showToast(`User ${name} has been BANNED & Flagged!`, 'error');
+    closeModal('userModal');
+    _navigateInternal('users');
+  } catch(e) {
+    showToast('Error banning user: ' + e.message, 'error');
+  }
+}
+
 // User detail modal
 async function showUserDetail(uid) {
   const u = ALL_USERS.find(x => x.id === uid);
@@ -809,7 +993,7 @@ async function showUserDetail(uid) {
 
   const modal = openModal('userModal');
   modal.innerHTML = `
-  <div class="modal">
+  <div class="modal max-w-xl">
     <div class="flex items-start justify-between mb-5">
       <div class="flex items-center gap-4">
         ${avatar(u.name || '?')}
@@ -828,7 +1012,8 @@ async function showUserDetail(uid) {
     const records = await loadAttendance(uid, ym);
     const s       = attSummary(records);
     const estSal  = estimatedSalary(u, s);
-    const attBlocked = records.length === 0 && u.name; // likely blocked, not just no records
+    const attBlocked = records.length === 0 && u.name;
+    const audit   = await computeUserFraudAudit(u, records);
 
     document.getElementById('userDetailBody').innerHTML = `
       <!-- Profile fields -->
@@ -838,7 +1023,48 @@ async function showUserDetail(uid) {
         ${miniStat('Working Days',   u.workingDays ? u.workingDays + ' days' : 'Not set')}
         ${miniStat('Std Hours',      u.standardHours ? u.standardHours + 'h/day' : 'Not set')}
         ${miniStat('Overtime Rate',  u.overtimeRate ? u.overtimeRate + 'x' : '—')}
-        ${miniStat('Coin Balance',   userCoinBalance(u) != null ? '🪙 ' + userCoinBalance(u) : '—')}
+        ${miniStat('Coin Balance',   userCoinBalance(u) != null ? '🪙 ' + userCoinBalance(u).toLocaleString() : '—')}
+      </div>
+
+      <!-- Anti-Fraud Security Audit -->
+      <div class="rounded-2xl p-4 mb-4 border ${audit.riskLevel === 'HIGH_RISK' ? 'bg-red-500/10 border-red-500/30' : audit.riskLevel === 'WARNING' ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">${audit.riskLevel === 'HIGH_RISK' ? '🔴' : audit.riskLevel === 'WARNING' ? '🟡' : '🟢'}</span>
+            <h4 class="font-bold text-sm text-primary">Security & Anti-Fraud Audit</h4>
+          </div>
+          <span class="badge ${audit.riskLevel === 'HIGH_RISK' ? 'badge-absent' : audit.riskLevel === 'WARNING' ? 'badge-half' : 'badge-present'} font-bold">
+            ${audit.riskLevel === 'HIGH_RISK' ? 'HIGH RISK' : audit.riskLevel === 'WARNING' ? 'SUSPICIOUS' : 'VERIFIED SAFE'}
+          </span>
+        </div>
+
+        ${audit.flags.length > 0 ? `
+        <div class="space-y-1.5 mb-3 bg-app/80 p-3 rounded-xl border border-divider">
+          ${audit.flags.map(f => `<div class="text-xs font-medium text-red-400 leading-tight">${f}</div>`).join('')}
+        </div>` : `<p class="text-xs text-green-500 font-medium mb-3">✓ Normal coin activity log. No suspicious anomalies detected.</p>`}
+
+        <div class="bg-soft-surface rounded-xl p-3 space-y-2 text-xs">
+          <div class="font-bold text-primary border-b border-divider pb-1 mb-1">🪙 Coin Earnings & Activity Breakdown</div>
+          <div class="flex justify-between"><span class="text-secondary">📅 Attendance & OT Coins:</span><span class="font-mono font-semibold">~${audit.attCoins.toLocaleString()} AX</span></div>
+          <div class="flex justify-between"><span class="text-secondary">👥 Referral Bonus (${audit.refCount} users):</span><span class="font-mono font-semibold">~${audit.referralCoins.toLocaleString()} AX</span></div>
+          <div class="flex justify-between"><span class="text-secondary">🎁 Daily Spin & Reward Claims:</span><span class="font-mono font-semibold">~${audit.rewardsCoins.toLocaleString()} AX</span></div>
+          <div class="flex justify-between border-t border-divider pt-1 font-bold text-primary">
+            <span>ESTIMATED LEGITIMATE EARNINGS:</span>
+            <span class="font-mono text-violet">~${audit.estimatedLegitCoins.toLocaleString()} AX</span>
+          </div>
+          <div class="flex justify-between text-secondary pt-1">
+            <span>💸 Total Withdrawals Requested:</span>
+            <span class="font-mono font-semibold text-primary">${audit.totalWithdrawn.toLocaleString()} AX (${audit.userWithdrawals.length} reqs)</span>
+          </div>
+          <div class="flex justify-between text-secondary">
+            <span>🪙 Current Wallet Balance:</span>
+            <span class="font-mono font-semibold text-primary">${audit.currentCoins.toLocaleString()} AX</span>
+          </div>
+          <div class="flex justify-between border-t border-divider pt-1 font-bold ${audit.discrepancy > 1000 ? 'text-red-400' : 'text-green-500'}">
+            <span>AUDIT DISCREPANCY:</span>
+            <span class="font-mono">${audit.discrepancy > 0 ? '+' : ''}${audit.discrepancy.toLocaleString()} AX</span>
+          </div>
+        </div>
       </div>
 
       ${u.rewards ? `
@@ -849,17 +1075,6 @@ async function showUserDetail(uid) {
           ${miniStat('Daily Spins Used', u.rewards.dailySpinsUsed || 0)}
           ${miniStat('Last Spin Date',   u.rewards.lastSpinDate || '—')}
           ${miniStat('Last Login Date',  u.rewards.lastDailyLoginDate || '—')}
-        </div>
-      </div>` : ''}
-
-      ${u.premiumUnlocks ? `
-      <div class="bg-soft-surface rounded-2xl p-4 mb-4">
-        <h4 class="font-semibold text-primary text-sm mb-2">Premium Unlocks</h4>
-        <div class="flex flex-wrap gap-2">
-          ${Object.entries(u.premiumUnlocks).map(([k,v]) => v
-            ? `<span class="badge badge-present">${k}</span>`
-            : `<span class="badge" style="background:var(--soft-surface);color:var(--text-secondary)">${k}</span>`
-          ).join('')}
         </div>
       </div>` : ''}
 
@@ -882,24 +1097,10 @@ async function showUserDetail(uid) {
           ${u.monthlySalary ? `<div class="mt-3 flex items-center justify-between"><span class="text-sm text-secondary">Estimated Salary</span><span class="font-bold text-primary">${fmtINR(estSal, u.currency)}</span></div>` : ''}`}
       </div>
 
-      ${records.length > 0 ? `
-      <div class="mb-4">
-        <h4 class="font-semibold text-primary mb-2 text-sm">Recent Records</h4>
-        <div class="space-y-1 max-h-48 overflow-y-auto">
-          ${records.slice(0, 10).map(r => `
-          <div class="flex items-center justify-between px-3 py-2 rounded-xl hover:bg-soft-surface text-sm">
-            <span class="text-secondary w-28 shrink-0">${formatDate(r.date)}</span>
-            ${statusBadge(r.status)}
-            <span class="text-secondary">${r.workedHours > 0 ? r.workedHours + 'h' : '—'}</span>
-            ${r.overtimeHours > 0 ? `<span class="badge badge-overtime">+${r.overtimeHours}h OT</span>` : ''}
-          </div>`).join('')}
-        </div>
-      </div>` : ''}
-
-      <div class="flex gap-3">
-        <button onclick="closeModal('userModal');openEditUserModal('${u.id}')" class="btn-primary flex-1">Edit User Data</button>
-        <button onclick="closeModal('userModal');_navigateInternal('attendance')" class="btn-outline flex-1">Go to Attendance</button>
-        <button onclick="closeModal('userModal')" class="btn-ghost py-2.5 px-4">Close</button>
+      <div class="flex flex-wrap gap-2 pt-2">
+        <button onclick="closeModal('userModal');openEditUserModal('${u.id}')" class="btn-primary flex-1 py-2 text-xs">Edit Profile / Coins</button>
+        <button onclick="toggleBanUser('${u.id}')" class="btn-danger flex-1 py-2 text-xs">🚫 Freeze / Ban User</button>
+        <button onclick="closeModal('userModal')" class="btn-ghost py-2 px-3 text-xs">Close</button>
       </div>`;
   } catch(e) {
     document.getElementById('userDetailBody').innerHTML = fbErrorBanner(e);
@@ -1594,6 +1795,79 @@ function downloadCSV(csv, filename) {
   a.href = URL.createObjectURL(blob);
   a.download = filename;
   a.click();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PWA / ANDROID APP INSTALLATION SUPPORT
+// ═══════════════════════════════════════════════════════════════
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+});
+
+function openInstallModal() {
+  const modal = openModal('appInstallModal');
+  const isInstalled = window.matchMedia('(display-mode: standalone)').matches;
+
+  modal.innerHTML = `
+  <div class="modal max-w-md">
+    <div class="flex items-center justify-between mb-4 border-b border-divider pb-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-2xl bg-violet flex items-center justify-center text-white text-xl shadow-violet-sm">
+          📱
+        </div>
+        <div>
+          <h2 class="text-lg font-bold text-primary">Install Android App</h2>
+          <p class="text-xs text-secondary">Self Attendance Pro Admin</p>
+        </div>
+      </div>
+      <button onclick="closeModal('appInstallModal')" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+    </div>
+
+    <div class="space-y-4 text-sm">
+      <div class="bg-violet/10 border border-violet/20 rounded-2xl p-4 text-primary">
+        <p class="font-semibold text-violet mb-1">✨ Quick Mobile Access</p>
+        <p class="text-xs text-secondary">You can install this Admin Panel directly on your Android phone home screen as an App! No browser address bar, instant loading.</p>
+      </div>
+
+      ${deferredPrompt ? `
+      <button onclick="triggerPwaInstall()" class="btn-primary w-full py-3 text-base font-semibold shadow-violet flex items-center justify-center gap-2">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Install App on Android Now
+      </button>
+      ` : isInstalled ? `
+      <div class="p-3 bg-green-50 border border-green-200 rounded-xl text-green-700 text-xs font-semibold text-center">
+        ✓ Already running as installed App!
+      </div>
+      ` : ''}
+
+      <div class="card p-4 space-y-3 bg-soft-surface">
+        <p class="font-bold text-primary text-xs uppercase tracking-wide">Manual 2-Step Android Install</p>
+        <ol class="space-y-2.5 text-xs text-secondary list-decimal list-inside">
+          <li>Open this link in <strong>Chrome</strong> on your Android Phone.</li>
+          <li>Tap the <strong>3 Dots (⋮)</strong> menu in top-right of Chrome.</li>
+          <li>Select <strong>"Add to Home Screen"</strong> or <strong>"Install App"</strong>.</li>
+          <li>Done! The app icon will appear on your phone screen.</li>
+        </ol>
+      </div>
+
+      <div class="text-xs text-secondary text-center pt-1 border-t border-divider">
+        💡 <em>Once added, it works like a native APK app without needing to open the browser every time.</em>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function triggerPwaInstall() {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const choice = await deferredPrompt.userChoice;
+  if (choice.outcome === 'accepted') {
+    showToast('App installed on phone!');
+    closeModal('appInstallModal');
+  }
+  deferredPrompt = null;
 }
 
 // ═══════════════════════════════════════════════════════════════
