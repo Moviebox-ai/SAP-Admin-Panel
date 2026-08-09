@@ -1231,7 +1231,21 @@ async function saveUserProfile(uid) {
       coins: coins
     };
 
-    await db.collection('users').doc(uid).set(updateData, { merge: true });
+    // The `users/{uid}` doc's axCoins/coins fields are what THIS panel
+    // displays, but the live app spends/reads its real balance from
+    // users/{uid}/wallet/wallet.balance. Write both in one batch so the
+    // app's wallet actually reflects the coin change an admin makes here.
+    const userRef   = db.collection('users').doc(uid);
+    const walletRef = userRef.collection('wallet').doc('wallet');
+
+    const batch = db.batch();
+    batch.set(userRef, updateData, { merge: true });
+    batch.set(walletRef, {
+      balance: coins,
+      lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    await batch.commit();
 
     // Update in-memory ALL_USERS
     const idx = ALL_USERS.findIndex(x => x.id === uid);
