@@ -29,11 +29,11 @@
 <body class="font-inter bg-app text-primary">
 
   <!-- ══════════════════════════════════════════
-       SCREEN 1 — LOGIN
+       SCREEN 1 — LOGIN & AUTHENTICATION
   ══════════════════════════════════════════ -->
-  <div id="loginScreen" class="min-h-screen flex items-center justify-center px-4">
+  <div id="loginScreen" class="min-h-screen flex items-center justify-center px-4 py-8">
     <div class="w-full max-w-md">
-      <div class="text-center mb-8">
+      <div class="text-center mb-6">
         <div class="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-violet mb-4 shadow-violet">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
@@ -41,33 +41,101 @@
           </svg>
         </div>
         <h1 class="text-3xl font-bold text-primary">Admin Panel</h1>
-        <p class="text-secondary mt-1">Self Attendance Pro</p>
+        <p class="text-secondary mt-1 text-sm">Self Attendance Pro Management</p>
       </div>
 
-      <div class="card p-8">
-        <h2 class="text-xl font-semibold text-primary mb-6">Sign In</h2>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-secondary mb-2">Email Address</label>
-            <input id="loginEmail" type="email" class="input-field" placeholder="admin@example.com" />
+      <div class="card p-6 sm:p-8 shadow-xl">
+        <!-- Auth Mode Tabs -->
+        <div class="flex bg-soft-surface p-1 rounded-xl mb-6">
+          <button id="tabSignIn" onclick="switchAuthMode('signin')" class="flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm">
+            Sign In
+          </button>
+          <button id="tabRegister" onclick="switchAuthMode('register')" class="flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all text-secondary hover:text-primary">
+            Set Password
+          </button>
+          <button id="tabReset" onclick="switchAuthMode('reset')" class="flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all text-secondary hover:text-primary">
+            Reset Link
+          </button>
+        </div>
+
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <label class="block text-xs font-semibold text-secondary uppercase tracking-wider">Admin Email</label>
+            <span class="text-xs text-secondary">Authorized IDs:</span>
           </div>
+          <!-- Quick selector chips for authorized admin emails -->
+          <div class="flex flex-wrap gap-1.5 mb-2.5">
+            <button type="button" onclick="quickFillEmail('yogeshkumar53076@gmail.com')" class="text-xs bg-soft-surface hover:bg-violet hover:text-white text-violet px-2.5 py-1 rounded-lg transition-colors font-medium border border-divider">
+              yogeshkumar53076@gmail.com
+            </button>
+            <button type="button" onclick="quickFillEmail('rohankumar53076@gmail.com')" class="text-xs bg-soft-surface hover:bg-violet hover:text-white text-violet px-2.5 py-1 rounded-lg transition-colors font-medium border border-divider">
+              rohankumar53076@gmail.com
+            </button>
+          </div>
+          <input id="loginEmail" type="email" class="input-field text-sm" placeholder="admin@example.com" value="yogeshkumar53076@gmail.com" />
+        </div>
+
+        <!-- Password Field (Hidden in Reset mode) -->
+        <div id="passwordGroup" class="space-y-4">
           <div>
-            <label class="block text-sm font-medium text-secondary mb-2">Password</label>
+            <div class="flex items-center justify-between mb-2">
+              <label class="block text-xs font-semibold text-secondary uppercase tracking-wider" id="passLabel">Password</label>
+              <button id="forgotPassLink" type="button" onclick="switchAuthMode('reset')" class="text-xs text-violet hover:underline font-medium">Forgot Password?</button>
+            </div>
             <div class="relative">
-              <input id="loginPassword" type="password" class="input-field pr-12" placeholder="••••••••" />
-              <button onclick="togglePassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary hover:text-primary">
+              <input id="loginPassword" type="password" class="input-field pr-12 text-sm" placeholder="••••••••" />
+              <button type="button" onclick="togglePassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-secondary hover:text-primary">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
           </div>
-          <div id="loginError" class="hidden text-red-500 text-sm bg-red-50 rounded-xl p-3"></div>
-          <button id="loginBtn" onclick="handleLogin()" class="btn-primary w-full py-3.5 text-base font-semibold mt-2">
-            Sign In with Firebase
-          </button>
+
+          <!-- Confirm Password (Only in Register mode) -->
+          <div id="confirmPasswordGroup" class="hidden">
+            <label class="block text-xs font-semibold text-secondary uppercase tracking-wider mb-2">Confirm Password</label>
+            <input id="loginConfirmPassword" type="password" class="input-field text-sm" placeholder="••••••••" />
+          </div>
         </div>
-        <div id="firebaseStatus" class="mt-5 flex items-center gap-2 text-sm">
-          <div class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
-          <span class="text-secondary">Connecting to Firebase…</span>
+
+        <!-- Dynamic Error Banner with Action Resolution -->
+        <div id="loginError" class="hidden text-red-600 text-xs sm:text-sm bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl p-3.5 mt-4 space-y-2"></div>
+
+        <!-- Primary Action Button -->
+        <button id="loginBtn" onclick="submitAuthForm()" class="btn-primary w-full py-3 text-sm font-semibold mt-4 shadow-md">
+          Sign In with Firebase
+        </button>
+
+        <!-- Divider -->
+        <div class="flex items-center my-4">
+          <div class="flex-1 border-t border-divider"></div>
+          <span class="px-3 text-xs text-secondary font-medium">OR</span>
+          <div class="flex-1 border-t border-divider"></div>
+        </div>
+
+        <!-- Google Sign-In Button -->
+        <button id="googleBtn" type="button" onclick="handleGoogleLogin()" class="w-full py-2.5 px-4 rounded-xl border border-divider hover:bg-soft-surface text-primary text-xs sm:text-sm font-medium flex items-center justify-center gap-2.5 transition-colors">
+          <svg width="18" height="18" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+          </svg>
+          Sign In with Google (Instant)
+        </button>
+
+        <!-- Demo / Quick Access Mode -->
+        <button id="demoBtn" type="button" onclick="handleDemoLogin()" class="w-full mt-2 py-2 px-4 rounded-xl text-secondary hover:text-violet hover:bg-soft-surface text-xs font-medium flex items-center justify-center gap-1.5 transition-colors">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+          Quick Preview / Offline Admin Mode
+        </button>
+
+        <!-- Realtime Firebase Connection Status -->
+        <div id="firebaseStatus" class="mt-4 pt-3 border-t border-divider flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <div id="statusDot" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
+            <span id="statusText" class="text-secondary">Connecting to Firebase…</span>
+          </div>
+          <span class="text-[10px] text-secondary font-mono">selfattendance-42445</span>
         </div>
       </div>
     </div>

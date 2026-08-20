@@ -18,7 +18,10 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 // ── Admin emails — must match Firestore security rules isAdmin() ──
-const ADMIN_EMAILS = ['rohankumar53076@gmail.com', 'yogeshkumar53076@gmail.com'];
+const ADMIN_EMAILS = [
+  'yogeshkumar53076@gmail.com',
+  'rohankumar53076@gmail.com'
+];
 
 // ── Global state ───────────────────────────────────────────────
 let currentAdmin     = null;
@@ -28,30 +31,70 @@ let ATTENDANCE_CACHE = {};
 let usersLoading     = false;
 let ALL_WITHDRAWALS  = [];
 let withdrawalsUnsub = null;
+let isDemoMode       = false;
+
+// ── Helper to update Firebase status on Login Screen ───────────
+function updateFirebaseStatusUI(status, text) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  if (!dot || !txt) return;
+
+  if (status === 'connected') {
+    dot.className = 'w-2 h-2 rounded-full bg-green-500';
+    txt.className = 'text-green-600 font-medium';
+    txt.textContent = text || 'Firebase Connected & Ready';
+  } else if (status === 'error') {
+    dot.className = 'w-2 h-2 rounded-full bg-red-500';
+    txt.className = 'text-red-500 font-medium';
+    txt.textContent = text || 'Firebase Connection Error';
+  } else {
+    dot.className = 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
+    txt.className = 'text-secondary';
+    txt.textContent = text || 'Connecting to Firebase…';
+  }
+}
+
+// Check Firebase connection right away
+try {
+  if (firebase.apps.length > 0) {
+    setTimeout(() => updateFirebaseStatusUI('connected', 'Firebase Connected & Ready'), 300);
+  }
+} catch (e) {
+  console.warn('Firebase init check:', e);
+}
 
 // ── Auth state ─────────────────────────────────────────────────
 auth.onAuthStateChanged(async (user) => {
+  updateFirebaseStatusUI('connected', 'Firebase Connected & Ready');
   if (user) {
     currentAdmin = user;
     updateHeaderUI(user);
     await verifyAdminAccess(user);
   } else {
-    currentAdmin = null;
-    IS_ADMIN     = false;
-    showScreen('login');
+    if (!isDemoMode) {
+      currentAdmin = null;
+      IS_ADMIN     = false;
+      showScreen('login');
+    }
   }
 });
 
 // ── Admin verification ─────────────────────────────────────────
-// PRIMARY: Email-based check — matches the Firestore security rules
-// isAdmin() function. No Firestore document needed.
-// FALLBACK: Also checks adminSettings/adminConfig.adminUids[] for
-// backwards compatibility.
+// PRIMARY: Email-based check (case-insensitive & trimmed)
+// FALLBACK 1: adminSettings/adminConfig.adminUids[]
+// FALLBACK 2: users/{uid}.role === 'admin'
 async function verifyAdminAccess(user) {
-  showScreen('loading');
+  if (!user) {
+    showScreen('login');
+    return;
+  }
 
-  // Step 1: Email check (instant, no Firestore read required)
-  if (ADMIN_EMAILS.includes(user.email)) {
+  showScreen('loading');
+  const cleanEmail = (user.email || '').toLowerCase().trim();
+  const normalizedAdmins = ADMIN_EMAILS.map(e => e.toLowerCase().trim());
+
+  // Step 1: Email check (instant, reliable)
+  if (cleanEmail && normalizedAdmins.includes(cleanEmail)) {
     IS_ADMIN = true;
     showScreen('app');
     loadAllUsers();
@@ -59,30 +102,42 @@ async function verifyAdminAccess(user) {
     return;
   }
 
-  // Step 2: Fallback — check adminUids in Firestore
+  // Step 2: Fallback — check adminUids in Firestore adminSettings/adminConfig
   try {
     const snap = await db.doc('adminSettings/adminConfig').get();
-    if (!snap.exists) {
-      showScreen('notAdmin', user);
-      return;
-    }
-    const adminUids = snap.data().adminUids || [];
-    if (adminUids.includes(user.uid)) {
-      IS_ADMIN = true;
-      showScreen('app');
-      loadAllUsers();
-      listenWithdrawals();
-    } else {
-      showScreen('notAdmin', user);
+    if (snap.exists) {
+      const adminUids = snap.data().adminUids || [];
+      if (adminUids.includes(user.uid)) {
+        IS_ADMIN = true;
+        showScreen('app');
+        loadAllUsers();
+        listenWithdrawals();
+        return;
+      }
     }
   } catch (e) {
-    if (e.code === 'permission-denied' || e.code === 'not-found') {
-      showScreen('notAdmin', user);
-    } else {
-      alert('Firebase error during admin check: ' + e.message);
-      showScreen('login');
-    }
+    console.warn('adminConfig check skipped:', e.message);
   }
+
+  // Step 3: Check users collection document for role or isAdmin flag
+  try {
+    const userSnap = await db.collection('users').doc(user.uid).get();
+    if (userSnap.exists) {
+      const uData = userSnap.data();
+      if (uData.role === 'admin' || uData.isAdmin === true) {
+        IS_ADMIN = true;
+        showScreen('app');
+        loadAllUsers();
+        listenWithdrawals();
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('User profile admin check skipped:', e.message);
+  }
+
+  // Step 4: Show unauthorized screen with UID & Email
+  showScreen('notAdmin', user);
 }
 
 // ── Screen controller ──────────────────────────────────────────

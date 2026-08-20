@@ -8,8 +8,70 @@ let sidebarOpen = false;
 let charts = {};
 let attSelectedUser = null;
 let attSelectedYM   = null;
+let currentAuthMode = 'signin'; // 'signin' | 'register' | 'reset'
 
-// ── Auth ──────────────────────────────────────────────────────
+// ── Auth Mode Switcher ─────────────────────────────────────────
+function switchAuthMode(mode) {
+  currentAuthMode = mode;
+  const tabIn = document.getElementById('tabSignIn');
+  const tabReg = document.getElementById('tabRegister');
+  const tabRes = document.getElementById('tabReset');
+  const passGroup = document.getElementById('passwordGroup');
+  const confirmGroup = document.getElementById('confirmPasswordGroup');
+  const forgotLink = document.getElementById('forgotPassLink');
+  const btn = document.getElementById('loginBtn');
+  const errEl = document.getElementById('loginError');
+
+  if (errEl) errEl.classList.add('hidden');
+
+  // Reset tab styles
+  [tabIn, tabReg, tabRes].forEach(tab => {
+    if (tab) {
+      tab.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all text-secondary hover:text-primary';
+    }
+  });
+
+  if (mode === 'signin') {
+    if (tabIn) tabIn.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm';
+    if (passGroup) passGroup.classList.remove('hidden');
+    if (confirmGroup) confirmGroup.classList.add('hidden');
+    if (forgotLink) forgotLink.classList.remove('hidden');
+    if (btn) btn.textContent = 'Sign In with Firebase';
+  } else if (mode === 'register') {
+    if (tabReg) tabReg.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm';
+    if (passGroup) passGroup.classList.remove('hidden');
+    if (confirmGroup) confirmGroup.classList.remove('hidden');
+    if (forgotLink) forgotLink.classList.add('hidden');
+    if (btn) btn.textContent = 'Set Password & Register Admin';
+  } else if (mode === 'reset') {
+    if (tabRes) tabRes.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm';
+    if (passGroup) passGroup.classList.add('hidden');
+    if (confirmGroup) confirmGroup.classList.add('hidden');
+    if (btn) btn.textContent = 'Send Password Reset Email';
+  }
+}
+
+function quickFillEmail(email) {
+  const inp = document.getElementById('loginEmail');
+  if (inp) {
+    inp.value = email;
+    inp.focus();
+    showToast(`Email set to ${email}`);
+  }
+}
+
+// ── Main Auth Submission Dispatcher ───────────────────────────
+async function submitAuthForm() {
+  if (currentAuthMode === 'signin') {
+    await handleLogin();
+  } else if (currentAuthMode === 'register') {
+    await handleSignUp();
+  } else if (currentAuthMode === 'reset') {
+    await handleForgotPassword();
+  }
+}
+
+// ── Auth: Sign In ─────────────────────────────────────────────
 async function handleLogin() {
   const email = document.getElementById('loginEmail').value.trim();
   const pass  = document.getElementById('loginPassword').value;
@@ -17,8 +79,7 @@ async function handleLogin() {
   const btn   = document.getElementById('loginBtn');
 
   if (!email || !pass) {
-    errEl.classList.remove('hidden');
-    errEl.textContent = 'Please enter email and password.';
+    showAuthError('Please enter both your email address and password.');
     return;
   }
   errEl.classList.add('hidden');
@@ -27,24 +88,204 @@ async function handleLogin() {
 
   try {
     await auth.signInWithEmailAndPassword(email, pass);
-    // onAuthStateChanged in firebase-config.js handles navigation
+    // onAuthStateChanged in firebase-config.js handles verification & navigation
   } catch(e) {
     btn.disabled = false;
     btn.textContent = 'Sign In with Firebase';
+
+    let errorHtml = '';
+    if (e.code === 'auth/user-not-found') {
+      errorHtml = `
+        <div class="font-semibold">No account found with this email in Firebase Auth.</div>
+        <div class="text-xs mt-1">If this is your first time, you need to create your admin password:</div>
+        <div class="mt-2 flex gap-2">
+          <button onclick="switchAuthMode('register')" class="bg-violet text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-violet-dark transition-colors">Create / Set Password Now →</button>
+        </div>
+      `;
+    } else if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
+      errorHtml = `
+        <div class="font-semibold">Incorrect password or credentials.</div>
+        <div class="text-xs mt-1">Check your password or click below to receive a password reset link:</div>
+        <div class="mt-2 flex gap-2">
+          <button onclick="switchAuthMode('reset');submitAuthForm()" class="bg-violet text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-violet-dark transition-colors">Send Reset Link to Email →</button>
+        </div>
+      `;
+    } else if (e.code === 'auth/invalid-email') {
+      errorHtml = 'Invalid email address format. Please check spelling.';
+    } else if (e.code === 'auth/too-many-requests') {
+      errorHtml = 'Too many failed attempts. Please wait a few moments or reset your password.';
+    } else if (e.code === 'auth/network-request-failed') {
+      errorHtml = 'Network connection issue. Please check your internet connection.';
+    } else {
+      errorHtml = `Firebase Error (${e.code || 'Auth'}): ${e.message}`;
+    }
+
+    errEl.innerHTML = errorHtml;
     errEl.classList.remove('hidden');
-    const msgs = {
-      'auth/user-not-found':         'No account found with this email.',
-      'auth/wrong-password':         'Incorrect password.',
-      'auth/invalid-credential':     'Invalid email or password.',
-      'auth/invalid-email':          'Invalid email address.',
-      'auth/too-many-requests':      'Too many attempts. Please wait and try again.',
-      'auth/network-request-failed': 'Network error. Check your connection.',
-    };
-    errEl.textContent = msgs[e.code] || e.message;
   }
 }
 
-function handleLogout() { auth.signOut(); }
+// ── Auth: Sign Up / Set Password ──────────────────────────────
+async function handleSignUp() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPassword').value;
+  const conf  = document.getElementById('loginConfirmPassword').value;
+  const errEl = document.getElementById('loginError');
+  const btn   = document.getElementById('loginBtn');
+
+  if (!email || !pass) {
+    showAuthError('Please enter email and create a password.');
+    return;
+  }
+  if (pass.length < 6) {
+    showAuthError('Password must be at least 6 characters long.');
+    return;
+  }
+  if (pass !== conf) {
+    showAuthError('Passwords do not match. Please re-enter.');
+    return;
+  }
+
+  errEl.classList.add('hidden');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner spinner-sm"></div> Creating Account…';
+
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(email, pass);
+    showToast('Account created successfully! Verifying admin access…');
+    // onAuthStateChanged in firebase-config.js handles verification & navigation
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Set Password & Register Admin';
+    if (e.code === 'auth/email-already-in-use') {
+      showAuthError(`
+        <div class="font-semibold">An account with this email already exists!</div>
+        <div class="text-xs mt-1">Please sign in with your password, or request a reset link:</div>
+        <div class="mt-2 flex gap-2">
+          <button onclick="switchAuthMode('signin')" class="bg-violet text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-violet-dark">Sign In →</button>
+          <button onclick="switchAuthMode('reset')" class="bg-soft-surface text-primary text-xs font-semibold px-3 py-1.5 rounded-lg border border-divider">Reset Password</button>
+        </div>
+      `);
+    } else {
+      showAuthError(`Registration error (${e.code || 'Auth'}): ${e.message}`);
+    }
+  }
+}
+
+// ── Auth: Forgot Password ─────────────────────────────────────
+async function handleForgotPassword() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const errEl = document.getElementById('loginError');
+  const btn   = document.getElementById('loginBtn');
+
+  if (!email) {
+    showAuthError('Please enter your email address to receive the password reset link.');
+    return;
+  }
+
+  errEl.classList.add('hidden');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner spinner-sm"></div> Sending Link…';
+
+  try {
+    await auth.sendPasswordResetEmail(email);
+    btn.disabled = false;
+    btn.textContent = 'Send Password Reset Email';
+    showToast(`Password reset link sent to ${email}!`);
+    errEl.className = 'text-green-700 text-xs sm:text-sm bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800 rounded-xl p-3.5 mt-4';
+    errEl.innerHTML = `
+      <div class="font-semibold">✓ Password reset email sent!</div>
+      <div class="text-xs mt-1">Check your inbox (${email}) and follow the link to set your password. Once done, come back and Sign In.</div>
+      <div class="mt-2">
+        <button onclick="switchAuthMode('signin')" class="bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-green-700">Back to Sign In →</button>
+      </div>
+    `;
+    errEl.classList.remove('hidden');
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Send Password Reset Email';
+    showAuthError(`Reset error: ${e.message}`);
+  }
+}
+
+// ── Auth: Google Sign-In ──────────────────────────────────────
+async function handleGoogleLogin() {
+  const btn = document.getElementById('googleBtn');
+  const errEl = document.getElementById('loginError');
+  errEl.classList.add('hidden');
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner spinner-sm"></div> Opening Google Sign-In…';
+  }
+
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await auth.signInWithPopup(provider);
+    // onAuthStateChanged in firebase-config.js handles navigation
+  } catch (e) {
+    console.error('Google Sign-In Error:', e);
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+        </svg>
+        Sign In with Google (Instant)
+      `;
+    }
+
+    if (e.code === 'auth/popup-closed-by-user') {
+      showAuthError('Google sign-in popup was closed before completing. Please try again.');
+    } else if (e.code === 'auth/unauthorized-domain') {
+      showAuthError(`
+        <div class="font-semibold">Firebase Authorized Domains Notice</div>
+        <div class="text-xs mt-1">This domain is not yet in your Firebase Console Authorized Domains list. Use Email &amp; Password or add this domain in Firebase Console → Authentication → Settings.</div>
+      `);
+    } else {
+      showAuthError(`Google Sign-In (${e.code || 'Error'}): ${e.message}`);
+    }
+  }
+}
+
+// ── Auth: Offline / Demo Admin Mode ───────────────────────────
+function handleDemoLogin() {
+  isDemoMode = true;
+  currentAdmin = {
+    email: 'yogeshkumar53076@gmail.com',
+    uid: 'demo_admin_yogesh',
+    displayName: 'Admin (Preview Mode)'
+  };
+  IS_ADMIN = true;
+  updateHeaderUI(currentAdmin);
+  showToast('Entered Demo Admin Mode');
+  showScreen('app');
+  if (typeof MOCK_USERS !== 'undefined' && ALL_USERS.length === 0) {
+    ALL_USERS = [...MOCK_USERS];
+    const countEl = document.getElementById('navUserCount');
+    if (countEl) countEl.textContent = ALL_USERS.length;
+  }
+}
+
+function showAuthError(msg) {
+  const errEl = document.getElementById('loginError');
+  if (!errEl) return;
+  errEl.className = 'text-red-600 text-xs sm:text-sm bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl p-3.5 mt-4 space-y-2';
+  errEl.innerHTML = msg;
+  errEl.classList.remove('hidden');
+}
+
+function handleLogout() {
+  isDemoMode = false;
+  currentAdmin = null;
+  IS_ADMIN = false;
+  if (auth) auth.signOut();
+  showScreen('login');
+}
 
 function togglePassword() {
   const inp = document.getElementById('loginPassword');
@@ -53,7 +294,7 @@ function togglePassword() {
 
 document.addEventListener('keydown', e => {
   const loginVisible = !document.getElementById('loginScreen').classList.contains('hidden');
-  if (e.key === 'Enter' && loginVisible) handleLogin();
+  if (e.key === 'Enter' && loginVisible) submitAuthForm();
 });
 
 // ── Theme ─────────────────────────────────────────────────────
