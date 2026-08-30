@@ -78,18 +78,6 @@ try {
 auth.onAuthStateChanged(async (user) => {
   updateFirebaseStatusUI('connected', 'Firebase Connected & Ready');
   if (user) {
-    // Verify that session is active in this browser tab/window
-    const sessionActive = sessionStorage.getItem('admin_session_active');
-    if (!sessionActive) {
-      // Browser or tab was closed previously; require fresh login
-      currentAdmin = null;
-      IS_ADMIN     = false;
-      try {
-        await auth.signOut();
-      } catch(e) {}
-      showScreen('login');
-      return;
-    }
     currentAdmin = user;
     updateHeaderUI(user);
     await verifyAdminAccess(user);
@@ -97,9 +85,6 @@ auth.onAuthStateChanged(async (user) => {
     if (!isDemoMode) {
       currentAdmin = null;
       IS_ADMIN     = false;
-      try {
-        sessionStorage.removeItem('admin_session_active');
-      } catch(e) {}
       showScreen('login');
     }
   }

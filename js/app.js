@@ -86,10 +86,7 @@ async function handleLogin() {
   btn.innerHTML = '<div class="spinner spinner-sm"></div> Signing in…';
 
   try {
-    // Ensure SESSION-only persistence before signing in
-    await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     await auth.signInWithEmailAndPassword(email, pass);
-    sessionStorage.setItem('admin_session_active', '1');
     // onAuthStateChanged in firebase-config.js handles verification & navigation
   } catch(e) {
     btn.disabled = false;
@@ -167,7 +164,7 @@ async function handleForgotPassword() {
 async function handleGoogleLogin() {
   const btn = document.getElementById('googleBtn');
   const errEl = document.getElementById('loginError');
-  errEl.classList.add('hidden');
+  if (errEl) errEl.classList.add('hidden');
   
   if (btn) {
     btn.disabled = true;
@@ -175,12 +172,10 @@ async function handleGoogleLogin() {
   }
 
   try {
-    await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     await auth.signInWithPopup(provider);
-    sessionStorage.setItem('admin_session_active', '1');
-    // onAuthStateChanged in firebase-config.js handles navigation
+    // onAuthStateChanged in firebase-config.js handles verification & navigation
   } catch (e) {
     console.error('Google Sign-In Error:', e);
     if (btn) {
@@ -198,10 +193,12 @@ async function handleGoogleLogin() {
 
     if (e.code === 'auth/popup-closed-by-user') {
       showAuthError('Google sign-in popup was closed before completing. Please try again.');
+    } else if (e.code === 'auth/popup-blocked') {
+      showAuthError('Popup was blocked by your browser. Please allow popups for this site or open the app in a new tab.');
     } else if (e.code === 'auth/unauthorized-domain') {
       showAuthError(`
         <div class="font-semibold">Firebase Authorized Domains Notice</div>
-        <div class="text-xs mt-1">This domain is not yet in your Firebase Console Authorized Domains list. Use Email &amp; Password or add this domain in Firebase Console → Authentication → Settings.</div>
+        <div class="text-xs mt-1">This domain is not in your Firebase Console Authorized Domains list. Please use Email &amp; Password or add this domain in Firebase Console → Authentication → Settings.</div>
       `);
     } else {
       showAuthError(`Google Sign-In (${e.code || 'Error'}): ${e.message}`);
