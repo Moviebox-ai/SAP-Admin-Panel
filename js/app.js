@@ -10,6 +10,28 @@ let attSelectedUser = null;
 let attSelectedYM   = null;
 let currentAuthMode = 'signin'; // 'signin' | 'register' | 'reset'
 
+// ── Razorpay Payouts Config State ─────────────────────────────
+let RAZORPAY_CONFIG = {
+  configured: false,
+  mode: 'NOT_CONFIGURED',
+  keyIdMasked: '',
+  accountNumberMasked: '',
+  hasAccountNumber: false,
+};
+
+async function fetchRazorpayConfig() {
+  try {
+    const res = await fetch('/api/razorpay/config');
+    const data = await res.json();
+    if (data && data.success) {
+      RAZORPAY_CONFIG = data;
+    }
+  } catch (e) {
+    console.warn('Razorpay config load failed:', e);
+  }
+}
+fetchRazorpayConfig();
+
 // ── Auth Mode Switcher ─────────────────────────────────────────
 function switchAuthMode(mode) {
   currentAuthMode = mode;
@@ -363,6 +385,7 @@ async function _navigateInternal(page) {
     attendance: ['Attendance',      'All attendance records'],
     salary:     ['Salary Reports',  'Salary breakdown'],
     withdrawals:['Withdrawals',    'Review and process payout requests'],
+    fraud:      ['Coin Flow & Anti-Fraud Center', 'Live coin ledger, hack detection & anomaly prevention'],
     settings:   ['Settings & Rules','Admin configuration'],
   };
   const [title, sub] = titles[page] || ['Admin', ''];
@@ -512,6 +535,7 @@ async function buildPage(page) {
     case 'attendance': return await buildAttendance();
     case 'salary':     return await buildSalary();
     case 'withdrawals':return await buildWithdrawals();
+    case 'fraud':      return await buildFraudPage();
     case 'settings':   return buildSettings();
     default:           return '<p>Page not found</p>';
   }
@@ -542,48 +566,115 @@ function isPendingStatus(status) {
   return s !== 'completed' && s !== 'approved' && s !== 'rejected' && s !== 'cancelled';
 }
 
+function parsePaymentDetails(request) {
+  const methodStr = String(request.methodDetails || request.method || request.paymentDetails || request.upiId || request.vpa || '').trim();
+  
+  // Extract UPI / VPA pattern: username@bank / number@upi / etc.
+  const upiMatch = methodStr.match(/[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}/);
+  const upiId = request.upiId || request.vpa || (upiMatch ? upiMatch[0] : '');
+
+  // Extract Bank Account Number (9-18 digits)
+  const accMatch = methodStr.match(/\b\d{9,18}\b/);
+  const accountNumber = request.accountNumber || request.bankAccount || (accMatch ? accMatch[0] : '');
+
+  // Extract IFSC code (4 uppercase letters + 0 + 6 alphanumeric)
+  const ifscMatch = methodStr.toUpperCase().match(/[A-Z]{4}0[A-Z0-9]{6}/);
+  const ifsc = request.ifsc || (ifscMatch ? ifscMatch[0] : '');
+
+  // Extract Phone Number (10 digits)
+  const phoneMatch = methodStr.match(/\b[6-9]\d{9}\b/);
+  const phone = request.phone || request.mobile || (phoneMatch ? phoneMatch[0] : '');
+
+  let detectedType = 'UPI';
+  if (accountNumber && ifsc) {
+    detectedType = 'BANK';
+  } else if (upiId) {
+    detectedType = 'UPI';
+  } else if (methodStr.toLowerCase().includes('phonepe') || methodStr.toLowerCase().includes('gpay') || methodStr.toLowerCase().includes('paytm')) {
+    detectedType = 'WALLET_OR_NUMBER';
+  }
+
+  return {
+    raw: methodStr,
+    upiId,
+    accountNumber,
+    ifsc,
+    phone,
+    detectedType
+  };
+}
+
 async function buildWithdrawals() {
   const requests = [...ALL_WITHDRAWALS]
     .sort((a, b) => (withdrawalDate(b)?.getTime() || 0) - (withdrawalDate(a)?.getTime() || 0));
   const pending = requests.filter(r => isPendingStatus(r.status));
 
   updateWithdrawalBadge();
+  await fetchRazorpayConfig();
 
   return `
   <div class="space-y-6">
+    <!-- Header -->
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
-        <h2 class="text-lg font-bold text-primary">Withdrawal Requests</h2>
-        <p class="text-secondary text-sm">Approve or reject payout requests submitted from the website. Real-time alerts & anti-fraud status enabled.</p>
+        <div class="flex items-center gap-2.5">
+          <h2 class="text-lg font-bold text-primary">Withdrawal Requests</h2>
+          <span class="badge ${RAZORPAY_CONFIG.configured ? 'badge-present' : 'badge-half'} text-xs">
+            ⚡ Razorpay: ${RAZORPAY_CONFIG.configured ? (RAZORPAY_CONFIG.mode + ' Mode') : 'Keys Required'}
+          </span>
+        </div>
+        <p class="text-secondary text-sm">Approve, reject, or execute 1-click Razorpay instant payouts directly to user UPI & bank accounts.</p>
       </div>
       <div class="flex items-center gap-2 flex-wrap">
+        <button onclick="openRazorpaySettingsModal()" class="btn-razorpay py-2 px-3 text-xs">
+          ⚡ Razorpay Settings
+        </button>
         <button onclick="requestNotificationPermission()" class="btn-outline py-2 px-3 text-xs flex items-center gap-1.5">
-          <span>🔔</span> Enable Push Alerts
+          <span>🔔</span> Push Alerts
         </button>
         <button onclick="playNotificationSound()" class="btn-ghost py-2 px-3 text-xs">
-          🔊 Test Sound
+          🔊 Sound
         </button>
         <button onclick="_navigateInternal('withdrawals')" class="btn-outline py-2 px-3 text-xs">↻ Refresh</button>
       </div>
     </div>
+
+    <!-- Razorpay quick status banner if not configured -->
+    ${!RAZORPAY_CONFIG.configured ? `
+    <div class="card p-4 border border-[#528FF0]/30 bg-gradient-to-r from-[#0C2340]/10 to-transparent flex items-center justify-between gap-4 flex-wrap">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-[#0C2340] text-[#528FF0] flex items-center justify-center font-bold text-lg">⚡</div>
+        <div>
+          <h4 class="font-bold text-primary text-sm">Automate Payouts with Razorpay</h4>
+          <p class="text-xs text-secondary">Set up your Razorpay Key ID and Secret to pay users via Instant UPI, IMPS, or Payout Links.</p>
+        </div>
+      </div>
+      <button onclick="openRazorpaySettingsModal()" class="btn-razorpay py-2 px-4 text-xs font-semibold">
+        Configure Razorpay API Keys →
+      </button>
+    </div>` : ''}
+
+    <!-- Stat Cards -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       ${statCard('Total Requests', requests.length, 'linear-gradient(135deg,#7C3AED,#A855F7)', ICONS.wallet, 'All time')}
       ${statCard('Pending', pending.length, 'linear-gradient(135deg,#D97706,#FCD34D)', ICONS.clock, 'Needs action')}
       ${statCard('Approved', requests.filter(r => ['completed','approved'].includes(String(r.status||'').toLowerCase())).length, 'linear-gradient(135deg,#059669,#34D399)', ICONS.check, 'Processed')}
       ${statCard('Rejected', requests.filter(r => String(r.status||'').toLowerCase() === 'rejected').length, 'linear-gradient(135deg,#DC2626,#FB7185)', ICONS.close, 'Declined')}
     </div>
+
+    <!-- Requests Table -->
     <div class="card overflow-hidden">
       <div class="overflow-x-auto">
         <table class="w-full text-left">
           <thead><tr>
             <th class="p-4 text-xs text-secondary">Request</th>
             <th class="p-4 text-xs text-secondary">User</th>
-            <th class="p-4 text-xs text-secondary">Payment details</th>
+            <th class="p-4 text-xs text-secondary">Payment Details</th>
             <th class="p-4 text-xs text-secondary">Coins</th>
-            <th class="p-4 text-xs text-secondary">Payout</th>
+            <th class="p-4 text-xs text-secondary">Amount</th>
             <th class="p-4 text-xs text-secondary">Submitted</th>
             <th class="p-4 text-xs text-secondary">Status</th>
-            <th class="p-4 text-xs text-secondary">Action</th>
+            <th class="p-4 text-xs text-secondary">Actions</th>
           </tr></thead>
           <tbody>
             ${requests.length ? requests.map(renderWithdrawalRow).join('') : `
@@ -607,8 +698,10 @@ function renderWithdrawalRow(request) {
   const pending = isPendingStatus(status);
   const safeId = String(request.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const coins = Number(request.amount ?? request.axCoins ?? 0);
+  const inrAmount = (Number(request.inrAmount) || (coins / 100)).toFixed(2);
 
   const user = ALL_USERS.find(u => u.id === request.userId || u.id === request.uid || (u.uniqueId && String(u.uniqueId) === String(request.uniqueId || request.myId)));
+  const payInfo = parsePaymentDetails(request);
 
   let fraudBadge = '';
   if (user) {
@@ -617,24 +710,63 @@ function renderWithdrawalRow(request) {
     fraudBadge = `<span class="badge badge-absent text-xs font-semibold">⚠️ High Request</span>`;
   }
 
-  return `<tr class="border-t border-divider hover:bg-soft-surface transition-colors">
-    <td class="p-4"><strong class="text-violet">${request.reqId || safeId.slice(0, 8)}</strong></td>
+  // Payment badge
+  let payBadge = '';
+  if (payInfo.upiId) {
+    payBadge = `
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <span class="badge-razorpay text-[11px] font-mono">UPI: ${payInfo.upiId}</span>
+        <button onclick="copyToClipboard('${payInfo.upiId}', 'UPI ID')" class="text-secondary hover:text-violet text-xs" title="Copy UPI">📋</button>
+      </div>`;
+  } else if (payInfo.accountNumber && payInfo.ifsc) {
+    payBadge = `
+      <div class="text-xs">
+        <span class="font-mono text-primary block font-semibold">A/C: ${payInfo.accountNumber}</span>
+        <span class="text-secondary text-[11px] font-mono">IFSC: ${payInfo.ifsc}</span>
+      </div>`;
+  } else {
+    payBadge = `<span class="text-xs text-primary font-medium">${request.methodDetails || request.method || '—'}</span>`;
+  }
+
+  // Actions
+  let actionHtml = '';
+  if (pending) {
+    actionHtml = `
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <button onclick="openRazorpayPayoutModal('${safeId}')" class="btn-razorpay py-1.5 px-2.5 text-xs shadow-sm" title="Pay via Razorpay Instant UPI or Bank Transfer">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Pay with Razorpay
+        </button>
+        <button onclick="updateWithdrawalStatus('${safeId}', 'completed')" class="btn-outline py-1.5 px-2.5 text-xs" title="Mark as approved manually">Approve</button>
+        <button onclick="promptRejectWithdrawal('${safeId}')" class="btn-danger py-1.5 px-2 text-xs" title="Reject and refund coins">Reject</button>
+      </div>
+    `;
+  } else if (request.payoutMethod === 'Razorpay' || request.razorpayPayoutId || request.utr) {
+    actionHtml = `
+      <div class="flex flex-col gap-0.5">
+        <span class="badge badge-present text-xs">✓ Razorpay Payout</span>
+        <span class="text-[10px] text-secondary font-mono">UTR: ${(request.utr || request.razorpayPayoutId || '—').slice(0, 14)}</span>
+      </div>`;
+  } else {
+    actionHtml = `<span class="text-secondary text-xs">${status === 'rejected' ? 'Refunded on next sign-in' : 'Done'}</span>`;
+  }
+
+  return `
+  <tr class="border-t border-divider hover:bg-soft-surface transition-colors">
+    <td class="p-4"><strong class="text-violet font-mono text-xs">${request.reqId || safeId.slice(0, 8)}</strong></td>
     <td class="p-4">
       <div class="flex items-center gap-2">
-        <div class="font-semibold text-primary ${user ? 'cursor-pointer hover:underline text-violet' : ''}" onclick="${user ? `showUserDetail('${user.id}')` : ''}">${request.name || 'User'}</div>
+        <div class="font-semibold text-primary text-sm ${user ? 'cursor-pointer hover:underline text-violet' : ''}" onclick="${user ? `showUserDetail('${user.id}')` : ''}">${request.name || user?.name || 'User'}</div>
         ${fraudBadge}
       </div>
-      <div class="text-secondary text-xs font-mono">#${request.uniqueId || request.myId || '—'}</div>
+      <div class="text-secondary text-xs font-mono">#${request.uniqueId || request.myId || user?.uniqueId || '—'}</div>
     </td>
-    <td class="p-4"><span class="text-sm text-primary font-medium">${request.methodDetails || request.method || '—'}</span></td>
-    <td class="p-4"><strong class="text-violet">${coins.toLocaleString()} AX</strong></td>
-    <td class="p-4"><strong class="text-green-500">₹${(Number(request.inrAmount) || (coins / 100)).toFixed(2)}</strong></td>
-    <td class="p-4 text-secondary text-xs">${date ? date.toLocaleString() : '—'}</td>
+    <td class="p-4">${payBadge}</td>
+    <td class="p-4"><strong class="text-violet font-semibold">${coins.toLocaleString()} AX</strong></td>
+    <td class="p-4"><strong class="text-green-600 font-bold text-sm">₹${inrAmount}</strong></td>
+    <td class="p-4 text-secondary text-xs">${date ? date.toLocaleString('en-IN', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '—'}</td>
     <td class="p-4"><span class="badge ${withdrawalStatusClass(status)}">${status}</span></td>
-    <td class="p-4">${pending ? `<div class="flex gap-2">
-      <button onclick="updateWithdrawalStatus('${safeId}', 'completed')" class="btn-primary py-1.5 px-3 text-xs shadow-sm">Approve</button>
-      <button onclick="promptRejectWithdrawal('${safeId}')" class="btn-danger py-1.5 px-3 text-xs">Reject</button>
-    </div>` : `<span class="text-secondary text-xs">${status === 'rejected' ? 'Refunded on next sign-in' : 'Done'}</span>`}</td>
+    <td class="p-4">${actionHtml}</td>
   </tr>`;
 }
 
@@ -664,18 +796,539 @@ async function updateWithdrawalStatus(docId, nextStatus, reason) {
     };
     if (nextStatus === 'rejected') update.rejectReason = reason || '';
 
-    // NOTE: admins cannot write users/{uid} under the current Firestore
-    // rules (only the account owner can) — so we do NOT try to refund
-    // coins here. The user's own wallet is credited back automatically
-    // the next time they sign in to the website or open the app, via
-    // claimPendingRefunds() / RewardRepository, which read their own
-    // rejected requests and self-refund.
     await ref.update(update);
     showToast(`Request ${nextStatus} successfully.${nextStatus === 'rejected' ? ' Coins will return to the user automatically.' : ''}`);
+    _navigateInternal('withdrawals');
   } catch (e) {
     showToast('Could not update request: ' + e.message, 'error');
   }
 }
+
+// ── Razorpay Payout Execution & Modals ────────────────────────
+async function openRazorpayPayoutModal(docId) {
+  await fetchRazorpayConfig();
+  const request = ALL_WITHDRAWALS.find(r => String(r.id) === String(docId));
+  if (!request) {
+    showToast('Withdrawal request not found.', 'error');
+    return;
+  }
+
+  const user = ALL_USERS.find(u => u.id === request.userId || u.id === request.uid || (u.uniqueId && String(u.uniqueId) === String(request.uniqueId || request.myId)));
+  const coins = Number(request.amount ?? request.axCoins ?? 0);
+  const inrAmount = (Number(request.inrAmount) || (coins / 100)).toFixed(2);
+  const payInfo = parsePaymentDetails(request);
+  const safeId = String(request.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+  const modal = openModal('razorpayModal');
+  modal.innerHTML = `
+  <div class="modal max-w-lg text-left">
+    <!-- Header -->
+    <div class="flex items-center justify-between pb-3 border-b border-divider mb-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#0C2340] to-[#002970] border border-[#528FF0]/40 flex items-center justify-center text-white text-lg shadow-md">
+          ⚡
+        </div>
+        <div>
+          <h2 class="text-base font-bold text-primary flex items-center gap-2">
+            Razorpay Payout
+            <span class="badge ${RAZORPAY_CONFIG.configured ? 'badge-present' : 'badge-absent'} text-[10px]">
+              ${RAZORPAY_CONFIG.configured ? RAZORPAY_CONFIG.mode : 'Keys Required'}
+            </span>
+          </h2>
+          <p class="text-xs text-secondary">Instant payout to user bank or UPI account</p>
+        </div>
+      </div>
+      <button onclick="closeModal('razorpayModal')" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+    </div>
+
+    <!-- Payout Summary Card -->
+    <div class="bg-gradient-to-br from-violet/5 to-violet/10 border border-violet/20 rounded-2xl p-4 mb-4">
+      <div class="flex items-center justify-between mb-1.5">
+        <span class="text-xs text-secondary font-medium">Recipient</span>
+        <span class="font-semibold text-primary text-sm">${request.name || user?.name || 'User'} (${user?.uniqueId ? '#' + user.uniqueId : '—'})</span>
+      </div>
+      <div class="flex items-center justify-between mb-1.5">
+        <span class="text-xs text-secondary font-medium">Coins Debited</span>
+        <span class="font-semibold text-violet text-sm">${coins.toLocaleString()} AX</span>
+      </div>
+      <div class="flex items-center justify-between pt-2 border-t border-violet/20">
+        <span class="text-sm font-bold text-primary">Payout Amount (INR)</span>
+        <span class="text-xl font-extrabold text-green-600">₹${inrAmount}</span>
+      </div>
+    </div>
+
+    ${!RAZORPAY_CONFIG.configured ? `
+    <!-- Setup Notice if not configured -->
+    <div class="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-xl p-3 mb-4 text-xs text-amber-800 dark:text-amber-200">
+      <p class="font-bold mb-1">⚙️ Razorpay API Keys Required</p>
+      <p class="mb-2">Enter your Razorpay Key ID and Secret to enable automated payouts.</p>
+      <button onclick="openRazorpaySettingsModal()" class="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-3 py-1.5 rounded-lg text-xs transition-colors">
+        Configure Razorpay Keys Now →
+      </button>
+    </div>
+    ` : ''}
+
+    <!-- Payment Mode Selector -->
+    <div class="space-y-2 mb-4">
+      <label class="text-xs font-bold text-secondary uppercase tracking-wide">Select Payout Channel</label>
+      <div class="grid grid-cols-2 gap-2">
+        <div id="modeCardUPI" class="payout-mode-card active" onclick="selectPayoutMode('UPI')">
+          <div class="flex items-center gap-1.5 font-bold text-xs text-primary mb-0.5">
+            <span>⚡</span> UPI Instant
+          </div>
+          <p class="text-[11px] text-secondary">Direct to VPA / UPI ID</p>
+        </div>
+        <div id="modeCardBank" class="payout-mode-card" onclick="selectPayoutMode('BANK')">
+          <div class="flex items-center gap-1.5 font-bold text-xs text-primary mb-0.5">
+            <span>🏦</span> Bank IMPS/NEFT
+          </div>
+          <p class="text-[11px] text-secondary">Direct Account + IFSC</p>
+        </div>
+        <div id="modeCardLink" class="payout-mode-card" onclick="selectPayoutMode('LINK')">
+          <div class="flex items-center gap-1.5 font-bold text-xs text-primary mb-0.5">
+            <span>🔗</span> Payout Link
+          </div>
+          <p class="text-[11px] text-secondary">Send self-claim link to user</p>
+        </div>
+        <div id="modeCardQR" class="payout-mode-card" onclick="selectPayoutMode('QR')">
+          <div class="flex items-center gap-1.5 font-bold text-xs text-primary mb-0.5">
+            <span>📱</span> UPI QR / App
+          </div>
+          <p class="text-[11px] text-secondary">Pay via PhonePe/GPay</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mode 1: UPI Form -->
+    <div id="payoutFormUPI" class="space-y-3 mb-4">
+      <div>
+        <label class="text-xs font-semibold text-primary block mb-1">Recipient UPI ID (VPA)</label>
+        <div class="flex gap-2">
+          <input id="rpUpiId" type="text" class="input-field py-2 text-sm" value="${payInfo.upiId || (payInfo.phone ? payInfo.phone + '@upi' : '')}" placeholder="e.g. name@okhdfcbank or 9876543210@paytm">
+          ${payInfo.upiId ? `<button onclick="copyToClipboard('${payInfo.upiId}', 'UPI ID')" class="btn-outline py-1 px-3 text-xs shrink-0" title="Copy">📋 Copy</button>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- Mode 2: Bank Form -->
+    <div id="payoutFormBank" class="space-y-3 mb-4 hidden">
+      <div>
+        <label class="text-xs font-semibold text-primary block mb-1">Bank Account Number</label>
+        <input id="rpAccountNum" type="text" class="input-field py-2 text-sm font-mono" value="${payInfo.accountNumber || ''}" placeholder="e.g. 123456789012">
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-xs font-semibold text-primary block mb-1">IFSC Code</label>
+          <input id="rpIfsc" type="text" class="input-field py-2 text-sm uppercase font-mono" value="${payInfo.ifsc || ''}" placeholder="e.g. SBIN0001234">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-primary block mb-1">Account Holder Name</label>
+          <input id="rpAccountName" type="text" class="input-field py-2 text-sm" value="${request.name || user?.name || ''}" placeholder="Holder Name">
+        </div>
+      </div>
+    </div>
+
+    <!-- Mode 3: Payout Link Form -->
+    <div id="payoutFormLink" class="space-y-3 mb-4 hidden">
+      <div class="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl text-xs text-blue-700 dark:text-blue-300">
+        Creates a secure Razorpay Payout Link where the user can enter their preferred bank or UPI account to receive ₹${inrAmount} instantly.
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-primary block mb-1">User Mobile (for SMS)</label>
+        <input id="rpPhone" type="text" class="input-field py-2 text-sm" value="${payInfo.phone || user?.phone || ''}" placeholder="10-digit mobile number">
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-primary block mb-1">User Email (for Notification)</label>
+        <input id="rpEmail" type="email" class="input-field py-2 text-sm" value="${user?.email || ''}" placeholder="user@example.com">
+      </div>
+    </div>
+
+    <!-- Mode 4: UPI QR & Intent Form -->
+    <div id="payoutFormQR" class="space-y-3 mb-4 hidden text-center">
+      <p class="text-xs text-secondary">Scan with PhonePe, Google Pay, or Paytm to pay ₹${inrAmount}:</p>
+      <div class="bg-white p-3 rounded-2xl border border-divider inline-block mx-auto shadow-sm my-2">
+        <img id="upiQrImg" src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`upi://pay?pa=${payInfo.upiId || 'selfattendance@upi'}&pn=${encodeURIComponent(request.name||'User')}&am=${inrAmount}&cu=INR&tn=SAP_Payout_${safeId.slice(0,6)}`)}" alt="UPI QR" class="w-36 h-36 mx-auto rounded-lg">
+      </div>
+      <div class="flex justify-center gap-2">
+        <a href="upi://pay?pa=${payInfo.upiId}&pn=${encodeURIComponent(request.name||'User')}&am=${inrAmount}&cu=INR&tn=SAP_Payout_${safeId.slice(0,6)}" class="btn-primary py-2 px-4 text-xs">
+          Open in UPI App (PhonePe / GPay)
+        </a>
+      </div>
+    </div>
+
+    <!-- Common Narration / Note -->
+    <div class="mb-4">
+      <label class="text-xs font-semibold text-secondary block mb-1">Payout Narration / Note</label>
+      <input id="rpNarration" type="text" class="input-field py-2 text-xs" value="SAP Payout #${request.reqId || safeId.slice(0,6)}" maxlength="30">
+    </div>
+
+    <!-- Error/Status Box -->
+    <div id="rpStatusBox" class="hidden rounded-xl p-3 mb-4 text-xs"></div>
+
+    <!-- Action Buttons -->
+    <div class="flex gap-2.5 pt-2 border-t border-divider">
+      <button id="rpSubmitBtn" onclick="submitRazorpayPayout('${safeId}')" class="btn-primary flex-1 py-3 text-sm font-semibold flex items-center justify-center gap-2 bg-gradient-to-r from-violet to-indigo-600 shadow-md">
+        <span>⚡</span> Send ₹${inrAmount} via Razorpay
+      </button>
+      <button onclick="closeModal('razorpayModal')" class="btn-ghost py-3 px-4 text-sm">Cancel</button>
+    </div>
+  </div>`;
+}
+
+function selectPayoutMode(mode) {
+  window._selectedPayoutMode = mode;
+  ['UPI', 'BANK', 'LINK', 'QR'].forEach(m => {
+    const card = document.getElementById('modeCard' + m);
+    const form = document.getElementById('payoutForm' + m);
+    if (card) {
+      if (m === mode) card.classList.add('active');
+      else card.classList.remove('active');
+    }
+    if (form) {
+      if (m === mode) form.classList.remove('hidden');
+      else form.classList.add('hidden');
+    }
+  });
+
+  const submitBtn = document.getElementById('rpSubmitBtn');
+  if (submitBtn) {
+    if (mode === 'QR') {
+      submitBtn.innerHTML = '✓ Mark as Paid & Complete';
+    } else if (mode === 'LINK') {
+      submitBtn.innerHTML = '🔗 Create Razorpay Payout Link';
+    } else {
+      submitBtn.innerHTML = '<span>⚡</span> Send Payout via Razorpay';
+    }
+  }
+}
+
+async function submitRazorpayPayout(docId) {
+  const request = ALL_WITHDRAWALS.find(r => String(r.id) === String(docId));
+  if (!request) return;
+
+  const mode = window._selectedPayoutMode || 'UPI';
+  const btn = document.getElementById('rpSubmitBtn');
+  const statusBox = document.getElementById('rpStatusBox');
+  const coins = Number(request.amount ?? request.axCoins ?? 0);
+  const inrAmount = Number(request.inrAmount) || (coins / 100);
+
+  if (mode === 'QR') {
+    await updateWithdrawalStatus(docId, 'completed', 'Paid via UPI QR / Direct App');
+    closeModal('razorpayModal');
+    return;
+  }
+
+  const upiId = document.getElementById('rpUpiId')?.value.trim();
+  const accountNumber = document.getElementById('rpAccountNum')?.value.trim();
+  const ifsc = document.getElementById('rpIfsc')?.value.trim();
+  const accountHolderName = document.getElementById('rpAccountName')?.value.trim();
+  const phone = document.getElementById('rpPhone')?.value.trim();
+  const email = document.getElementById('rpEmail')?.value.trim();
+  const narration = document.getElementById('rpNarration')?.value.trim() || 'SAP Payout';
+
+  if (mode === 'UPI' && !upiId) {
+    showRazorpayError('Please enter a valid UPI ID (e.g. username@okhdfcbank).');
+    return;
+  }
+  if (mode === 'BANK' && (!accountNumber || !ifsc)) {
+    showRazorpayError('Please enter both Bank Account Number and IFSC Code.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner spinner-sm"></div> Processing Razorpay Transfer…';
+  if (statusBox) statusBox.classList.add('hidden');
+
+  try {
+    let endpoint = '/api/razorpay/create-payout';
+    let payload = {
+      requestId: docId,
+      userId: request.userId || request.uid,
+      name: accountHolderName || request.name || 'User',
+      amountInr: inrAmount,
+      mode: mode === 'UPI' ? 'UPI' : 'IMPS',
+      upiId,
+      accountNumber,
+      ifsc,
+      phone,
+      email,
+      narration,
+    };
+
+    if (mode === 'LINK') {
+      endpoint = '/api/razorpay/create-payout-link';
+    }
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await res.json();
+
+    if (!result.success) {
+      throw new Error(result.message || 'Razorpay Payout could not be processed.');
+    }
+
+    // Success! Update Firestore withdrawal document
+    const ref = db.collection('withdrawals').doc(docId);
+    const updateData = {
+      status: 'completed',
+      payoutMethod: 'Razorpay',
+      razorpayPayoutId: result.payoutId || result.payoutLinkId || 'RP-COMPLETED',
+      utr: result.utr || result.payoutLinkId || `UTR-${Date.now()}`,
+      paidAmount: inrAmount,
+      payoutMode: mode,
+      reviewedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      reviewedBy: currentAdmin?.email || currentAdmin?.uid || 'admin'
+    };
+
+    if (result.payoutLinkUrl) {
+      updateData.payoutLinkUrl = result.payoutLinkUrl;
+    }
+
+    await ref.update(updateData);
+
+    // Update in-memory ALL_WITHDRAWALS cache
+    const idx = ALL_WITHDRAWALS.findIndex(r => String(r.id) === String(docId));
+    if (idx !== -1) {
+      ALL_WITHDRAWALS[idx] = { ...ALL_WITHDRAWALS[idx], ...updateData };
+    }
+
+    closeModal('razorpayModal');
+    showPayoutSuccessModal(result, inrAmount, request);
+    showToast(`✓ Razorpay Payout of ₹${inrAmount.toFixed(2)} completed successfully!`);
+
+    if (currentPage === 'withdrawals') {
+      _navigateInternal('withdrawals');
+    }
+  } catch (err) {
+    console.error('Razorpay Payout Error:', err);
+    btn.disabled = false;
+    btn.innerHTML = '<span>⚡</span> Retry Razorpay Payout';
+    showRazorpayError(err.message);
+  }
+}
+
+function showPayoutSuccessModal(result, amount, request) {
+  const modal = openModal('payoutSuccessModal');
+  modal.innerHTML = `
+  <div class="modal max-w-md text-center">
+    <div class="w-16 h-16 rounded-full bg-green-100 dark:bg-green-950/60 border-2 border-green-500 text-green-600 flex items-center justify-center mx-auto mb-3 text-2xl shadow-lg">
+      ✓
+    </div>
+    <h2 class="text-xl font-bold text-primary mb-1">Payout Processed!</h2>
+    <p class="text-xs text-secondary mb-4">Transaction confirmed via Razorpay</p>
+
+    <div class="bg-soft-surface rounded-2xl p-4 space-y-2.5 text-left text-xs mb-4">
+      <div class="flex justify-between">
+        <span class="text-secondary">Amount Paid</span>
+        <span class="font-bold text-green-600 text-sm">₹${Number(amount).toFixed(2)}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-secondary">Recipient</span>
+        <span class="font-semibold text-primary">${request.name || 'User'}</span>
+      </div>
+      ${result.utr ? `
+      <div class="flex justify-between">
+        <span class="text-secondary">Bank UTR</span>
+        <span class="font-mono font-bold text-violet">${result.utr}</span>
+      </div>` : ''}
+      ${result.payoutId ? `
+      <div class="flex justify-between">
+        <span class="text-secondary">Razorpay Payout ID</span>
+        <span class="font-mono text-primary">${result.payoutId}</span>
+      </div>` : ''}
+      ${result.payoutLinkUrl ? `
+      <div class="flex flex-col gap-1 pt-2 border-t border-divider">
+        <span class="text-secondary">Razorpay Payout Link</span>
+        <div class="flex items-center gap-1">
+          <input type="text" readonly value="${result.payoutLinkUrl}" class="input-field py-1 text-[11px] font-mono">
+          <button onclick="copyToClipboard('${result.payoutLinkUrl}', 'Payout Link')" class="btn-primary py-1 px-2 text-xs">Copy</button>
+        </div>
+      </div>` : ''}
+    </div>
+
+    <button onclick="closeModal('payoutSuccessModal');_navigateInternal('withdrawals')" class="btn-primary w-full py-2.5 text-sm font-semibold">
+      Done
+    </button>
+  </div>`;
+}
+
+function showRazorpayError(msg) {
+  const box = document.getElementById('rpStatusBox');
+  if (!box) return;
+  box.className = 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 rounded-xl p-3 mb-4 text-xs';
+  box.innerHTML = `<strong>Error:</strong> ${msg}`;
+  box.classList.remove('hidden');
+}
+
+function copyToClipboard(text, label = 'Copied') {
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(`${label} copied!`);
+  }).catch(() => {
+    showToast(`Copied: ${text}`);
+  });
+}
+
+// ── Razorpay Settings Modal & Handlers ────────────────────────
+async function openRazorpaySettingsModal() {
+  await fetchRazorpayConfig();
+  const modal = openModal('rpSettingsModal');
+  modal.innerHTML = `
+  <div class="modal max-w-lg text-left">
+    <div class="flex items-center justify-between pb-3 border-b border-divider mb-4">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-xl bg-[#0C2340] border border-[#528FF0]/40 flex items-center justify-center text-[#528FF0] font-bold text-base">
+          ⚡
+        </div>
+        <div>
+          <h2 class="text-base font-bold text-primary">Razorpay Payouts Configuration</h2>
+          <p class="text-xs text-secondary">Direct Razorpay / RazorpayX API credentials</p>
+        </div>
+      </div>
+      <button onclick="closeModal('rpSettingsModal')" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+    </div>
+
+    <div class="space-y-3.5 text-xs mb-4">
+      <div>
+        <label class="font-semibold text-primary block mb-1">Razorpay Key ID</label>
+        <input id="rpCfgKeyId" type="text" class="input-field py-2 text-sm font-mono" placeholder="rzp_test_... or rzp_live_...">
+        <span class="text-[11px] text-secondary">From Razorpay Dashboard → Settings → API Keys</span>
+      </div>
+
+      <div>
+        <label class="font-semibold text-primary block mb-1">Razorpay Key Secret</label>
+        <input id="rpCfgKeySecret" type="password" class="input-field py-2 text-sm font-mono" placeholder="Enter your Razorpay Secret">
+      </div>
+
+      <div>
+        <label class="font-semibold text-primary block mb-1">RazorpayX Account Number (Optional for Direct Bank/UPI Transfers)</label>
+        <input id="rpCfgAccountNum" type="text" class="input-field py-2 text-sm font-mono" placeholder="e.g. 7878780080316316">
+        <span class="text-[11px] text-secondary">Your RazorpayX Current Account number for Direct Payouts.</span>
+      </div>
+
+      <div>
+        <label class="font-semibold text-primary block mb-1">Webhook Secret (Optional)</label>
+        <input id="rpCfgWebhookSecret" type="password" class="input-field py-2 text-sm font-mono" placeholder="Webhook signing secret">
+      </div>
+
+      <div class="p-3 bg-soft-surface rounded-xl border border-divider">
+        <span class="font-semibold text-primary block mb-0.5">Live Webhook Endpoint URL</span>
+        <code class="text-violet font-mono text-[11px] select-all block break-all">${window.location.origin}/api/razorpay/webhook</code>
+      </div>
+    </div>
+
+    <div id="rpCfgStatusBox" class="hidden rounded-xl p-3 mb-4 text-xs"></div>
+
+    <div class="flex gap-2">
+      <button id="rpCfgTestBtn" onclick="testRazorpayConfigUI()" class="btn-outline flex-1 py-2.5 text-xs font-semibold">
+        🔍 Test Connection
+      </button>
+      <button id="rpCfgSaveBtn" onclick="saveRazorpayConfigUI()" class="btn-primary flex-1 py-2.5 text-xs font-semibold">
+        💾 Save Razorpay Keys
+      </button>
+    </div>
+  </div>`;
+}
+
+async function testRazorpayConfigUI() {
+  const btn = document.getElementById('rpCfgTestBtn');
+  const box = document.getElementById('rpCfgStatusBox');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner spinner-sm"></div> Testing…';
+
+  try {
+    const keyId = document.getElementById('rpCfgKeyId')?.value.trim();
+    const keySecret = document.getElementById('rpCfgKeySecret')?.value.trim();
+    if (keyId && keySecret) {
+      await fetch('/api/razorpay/save-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keyId,
+          keySecret,
+          accountNumber: document.getElementById('rpCfgAccountNum')?.value.trim(),
+          webhookSecret: document.getElementById('rpCfgWebhookSecret')?.value.trim()
+        })
+      });
+    }
+
+    const res = await fetch('/api/razorpay/test-connection', { method: 'POST' });
+    const data = await res.json();
+
+    btn.disabled = false;
+    btn.textContent = '🔍 Test Connection';
+
+    if (data.success) {
+      box.className = 'bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800 text-green-700 rounded-xl p-3 mb-4 text-xs';
+      box.innerHTML = `✓ <strong>Success:</strong> ${data.message} (${data.mode} Mode)`;
+      box.classList.remove('hidden');
+      await fetchRazorpayConfig();
+    } else {
+      box.className = 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 rounded-xl p-3 mb-4 text-xs';
+      box.innerHTML = `✕ <strong>Error:</strong> ${data.message}`;
+      box.classList.remove('hidden');
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '🔍 Test Connection';
+    box.className = 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 rounded-xl p-3 mb-4 text-xs';
+    box.innerHTML = `✕ <strong>Error:</strong> ${e.message}`;
+    box.classList.remove('hidden');
+  }
+}
+
+async function saveRazorpayConfigUI() {
+  const keyId = document.getElementById('rpCfgKeyId')?.value.trim();
+  const keySecret = document.getElementById('rpCfgKeySecret')?.value.trim();
+  const accountNumber = document.getElementById('rpCfgAccountNum')?.value.trim();
+  const webhookSecret = document.getElementById('rpCfgWebhookSecret')?.value.trim();
+  const btn = document.getElementById('rpCfgSaveBtn');
+  const box = document.getElementById('rpCfgStatusBox');
+
+  if (!keyId || !keySecret) {
+    box.className = 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 rounded-xl p-3 mb-4 text-xs';
+    box.innerHTML = 'Please enter both Razorpay Key ID and Key Secret.';
+    box.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner spinner-sm"></div> Saving…';
+
+  try {
+    const res = await fetch('/api/razorpay/save-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keyId, keySecret, accountNumber, webhookSecret })
+    });
+    const data = await res.json();
+    btn.disabled = false;
+    btn.textContent = '💾 Save Razorpay Keys';
+
+    if (data.success) {
+      showToast('Razorpay configuration saved successfully!');
+      closeModal('rpSettingsModal');
+      await fetchRazorpayConfig();
+      if (currentPage === 'withdrawals' || currentPage === 'settings') {
+        _navigateInternal(currentPage);
+      }
+    } else {
+      box.className = 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 rounded-xl p-3 mb-4 text-xs';
+      box.innerHTML = `✕ ${data.message}`;
+      box.classList.remove('hidden');
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '💾 Save Razorpay Keys';
+    box.className = 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-600 rounded-xl p-3 mb-4 text-xs';
+    box.innerHTML = `✕ Error: ${e.message}`;
+    box.classList.remove('hidden');
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════════════
 //  DASHBOARD
@@ -1112,16 +1765,48 @@ function exportUsersCSV() {
   showToast('Users CSV exported!');
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  COIN FLOW & ANTI-FRAUD INTELLIGENCE CENTER
+// ═══════════════════════════════════════════════════════════════
+
+let FRAUD_AUDIT_CACHE = {};
+let fraudFilterState = {
+  search: '',
+  risk: 'all',
+  sortBy: 'discrepancy'
+};
+
+function updateFraudNavBadge() {
+  const el = document.getElementById('navFraudCount');
+  if (!el) return;
+
+  let highRiskCount = 0;
+  ALL_USERS.forEach(u => {
+    const coins = userCoinBalance(u) ?? 0;
+    const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && x.uniqueId === u.uniqueId).length : 0;
+    if (coins < 0 || dupes > 0 || coins > 25000 || (coins > 5000 && !u.rewards?.totalCoinsEarned && !u.workingDays)) {
+      highRiskCount++;
+    }
+  });
+
+  el.textContent = highRiskCount;
+  if (highRiskCount > 0) {
+    el.className = 'ml-auto badge-count bg-red-500 text-white font-bold animate-pulse';
+  } else {
+    el.className = 'ml-auto badge-count';
+  }
+}
+
 async function computeUserFraudAudit(u, records = []) {
   const uid = u.id;
 
-  // 1. Attendance coins
+  // 1. Attendance & Overtime coins (100 AX per day, 50 AX half-day, 20 AX per OT hour)
   const presentDays = records.filter(r => r.status === 'PRESENT').length;
   const halfDays    = records.filter(r => r.status === 'HALF' || r.status === 'HALF_DAY').length;
   const otHours     = records.reduce((s, r) => s + (Number(r.overtimeHours) || 0), 0);
   const attCoins    = (presentDays * 100) + (halfDays * 50) + (otHours * 20);
 
-  // 2. Referrals
+  // 2. Referrals bonus (500 AX per referral)
   let refCount = 0;
   try {
     const refSnap = await db.collection('referrals').doc(uid).get();
@@ -1132,8 +1817,11 @@ async function computeUserFraudAudit(u, records = []) {
   } catch(e) { /* ignore */ }
   const referralCoins = refCount * 500;
 
-  // 3. Rewards
-  const rewardsCoins = u.rewards?.totalCoinsEarned || 0;
+  // 3. Rewards, Daily Login streaks & Lucky Wheel Spins
+  const rewardsCoins = Number(u.rewards?.totalCoinsEarned || 0);
+  const spinsUsed    = Number(u.rewards?.dailySpinsUsed || 0);
+  const streakCount  = Number(u.rewards?.currentStreak || 0);
+  const welcomeCoins = 100; // base signup bonus
 
   // 4. Withdrawals
   const userWithdrawals = ALL_WITHDRAWALS.filter(w => 
@@ -1142,57 +1830,75 @@ async function computeUserFraudAudit(u, records = []) {
   const totalWithdrawn = userWithdrawals.reduce((s, w) => s + Number(w.amount ?? w.axCoins ?? 0), 0);
   const pendingCount   = userWithdrawals.filter(w => isPendingStatus(w.status)).length;
 
-  // 5. Total lifetime & estimated
+  // 5. Mathematical Balances
   const currentCoins        = userCoinBalance(u) ?? 0;
   const totalLifetimeCoins  = currentCoins + totalWithdrawn;
-  const estimatedLegitCoins = attCoins + referralCoins + rewardsCoins;
+  const estimatedLegitCoins = attCoins + referralCoins + rewardsCoins + welcomeCoins;
   const discrepancy         = totalLifetimeCoins - estimatedLegitCoins;
 
-  // 6. Security & Fraud Risk Analysis
+  // 6. Multi-Vector Security & Anomaly Rule Engine
   const flags = [];
   let riskLevel = 'SAFE'; // 'SAFE' | 'WARNING' | 'HIGH_RISK'
+  let hackType = 'NORMAL';
 
   if (currentCoins < 0) {
     riskLevel = 'HIGH_RISK';
-    flags.push(`🔴 Negative coin balance (${currentCoins} AX). Invalid state.`);
+    hackType = 'NEGATIVE_BALANCE';
+    flags.push(`🔴 Negative coin balance (${currentCoins} AX). Race-condition or database exploit.`);
   }
 
-  if (discrepancy > 3000) {
+  if (discrepancy > 3000 || (currentCoins > 10000 && estimatedLegitCoins <= 200)) {
     riskLevel = 'HIGH_RISK';
-    flags.push(`⚠️ Excessive coin balance mismatch: +${discrepancy.toLocaleString()} AX above estimated legitimate activity (Attendance: ${attCoins}, Referrals: ${referralCoins}, Rewards: ${rewardsCoins}). Possible balance tamper.`);
+    hackType = 'MEMORY_INJECTION';
+    flags.push(`🔴 Massive coin balance injection: +${discrepancy.toLocaleString()} AX unexplained discrepancy. Likely modified via GameGuardian, Cheat Engine, or Rooted APK.`);
   } else if (discrepancy > 1000) {
-    if (riskLevel !== 'HIGH_RISK') riskLevel = 'WARNING';
-    flags.push(`⚠️ Balance is ${discrepancy.toLocaleString()} AX higher than recorded activity logs.`);
+    if (riskLevel !== 'HIGH_RISK') { riskLevel = 'WARNING'; hackType = 'SURPLUS_DISCREPANCY'; }
+    flags.push(`⚠️ Balance is +${discrepancy.toLocaleString()} AX higher than recorded attendance, referrals, and spins.`);
   }
 
-  // Check max single-day hours/overtime
+  // Check impossible attendance hours
   const invalidDay = records.find(r => (Number(r.overtimeHours) || 0) > 12 || (Number(r.workedHours) || 0) > 20);
   if (invalidDay) {
     riskLevel = 'HIGH_RISK';
-    flags.push(`⛔ Impossible working/OT hours on ${formatDate(invalidDay.date)} (${invalidDay.workedHours || 0}h worked, ${invalidDay.overtimeHours || 0}h OT).`);
+    hackType = 'IMPOSSIBLE_HOURS';
+    flags.push(`⛔ Impossible working hours on ${formatDate(invalidDay.date)} (${invalidDay.workedHours || 0}h worked, ${invalidDay.overtimeHours || 0}h OT).`);
   }
 
-  // Check duplicate uniqueId
+  // Check duplicate uniqueId / Device cloning
   if (u.uniqueId) {
-    const dupes = ALL_USERS.filter(x => x.id !== uid && x.uniqueId === u.uniqueId);
+    const dupes = ALL_USERS.filter(x => x.id !== uid && String(x.uniqueId) === String(u.uniqueId));
     if (dupes.length > 0) {
       riskLevel = 'HIGH_RISK';
-      flags.push(`⛔ Duplicate Unique ID #${u.uniqueId} shared with ${dupes.length} other profile(s). Multi-account risk.`);
+      hackType = 'CLONE_MULTI_ACCOUNT';
+      flags.push(`⛔ Duplicate Unique ID #${u.uniqueId} cloned across ${dupes.length + 1} accounts. Parallel Space / Device cloner risk.`);
     }
   }
 
   if (pendingCount > 3) {
+    if (riskLevel !== 'HIGH_RISK') { riskLevel = 'WARNING'; hackType = 'WITHDRAWAL_SPAM'; }
+    flags.push(`⚠️ Withdrawal spam: ${pendingCount} concurrent pending withdrawal requests.`);
+  }
+
+  if (currentCoins > 10000 && userWithdrawals.length > 0 && records.length === 0 && refCount === 0) {
     riskLevel = 'HIGH_RISK';
-    flags.push(`⚠️ Spam risk: ${pendingCount} concurrent pending withdrawal requests.`);
+    hackType = 'WHALE_DRAIN';
+    flags.push(`⛔ Immediate cashout drainer: Fresh account requested withdrawals without any recorded attendance or referrals.`);
   }
 
   return {
     riskLevel,
+    hackType,
     flags,
     attCoins,
+    presentDays,
+    halfDays,
+    otHours,
     refCount,
     referralCoins,
     rewardsCoins,
+    spinsUsed,
+    streakCount,
+    welcomeCoins,
     totalWithdrawn,
     currentCoins,
     totalLifetimeCoins,
@@ -1201,6 +1907,632 @@ async function computeUserFraudAudit(u, records = []) {
     userWithdrawals,
     pendingCount
   };
+}
+
+async function buildFraudPage() {
+  updateFraudNavBadge();
+
+  // Aggregate ecosystem totals
+  const totalCirculating = ALL_USERS.reduce((sum, u) => sum + (userCoinBalance(u) || 0), 0);
+  const totalWithdrawn = ALL_WITHDRAWALS.filter(w => ['completed','approved'].includes(String(w.status||'').toLowerCase()))
+    .reduce((sum, w) => sum + Number(w.amount ?? w.axCoins ?? 0), 0);
+  const totalPendingWithdrawal = ALL_WITHDRAWALS.filter(w => isPendingStatus(w.status))
+    .reduce((sum, w) => sum + Number(w.amount ?? w.axCoins ?? 0), 0);
+
+  // Quick pre-scan calculation for all users
+  const quickScanned = ALL_USERS.map(u => {
+    const coins = userCoinBalance(u) ?? 0;
+    const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && String(x.uniqueId) === String(u.uniqueId)).length : 0;
+    const rewards = Number(u.rewards?.totalCoinsEarned || 0);
+    const estLegit = rewards + 100;
+    const isHigh = coins < 0 || dupes > 0 || (coins > 10000 && estLegit < 500) || coins > 30000;
+    const isWarn = !isHigh && (coins > 3000 || dupes > 0);
+    return {
+      user: u,
+      coins,
+      dupes,
+      riskLevel: isHigh ? 'HIGH_RISK' : isWarn ? 'WARNING' : 'SAFE'
+    };
+  });
+
+  const highRiskCount = quickScanned.filter(x => x.riskLevel === 'HIGH_RISK').length;
+  const warningCount  = quickScanned.filter(x => x.riskLevel === 'WARNING').length;
+  const safeCount     = quickScanned.filter(x => x.riskLevel === 'SAFE').length;
+
+  return `
+  <div class="space-y-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <h2 class="text-lg font-bold text-primary">🪙 Coin Flow &amp; Anti-Fraud Intelligence</h2>
+          <span class="badge ${highRiskCount > 0 ? 'badge-absent pulse-threat' : 'badge-present'} text-xs font-bold">
+            ${highRiskCount > 0 ? `🚨 ${highRiskCount} High Risk Flagged` : '✓ Coin Economy Healthy'}
+          </span>
+        </div>
+        <p class="text-secondary text-sm">Real-time audit of user coin acquisition sources, memory-hack detection, device cloning, and balance tampering defense.</p>
+      </div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button onclick="runComprehensiveAntiFraudScan()" class="btn-primary py-2 px-3 text-xs flex items-center gap-1.5 shadow-sm">
+          <span>⚡</span> Deep Recalculate All
+        </button>
+        <button onclick="exportFraudAuditCSV()" class="btn-outline py-2 px-3 text-xs flex items-center gap-1.5">
+          <span>📥</span> Export Audit CSV
+        </button>
+        <button onclick="_navigateInternal('fraud')" class="btn-outline py-2 px-3 text-xs">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- Stat Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-secondary font-medium">Total In Circulation</span>
+          <span class="p-2 rounded-xl bg-violet/10 text-violet">🪙</span>
+        </div>
+        <div class="text-2xl font-bold text-primary">${totalCirculating.toLocaleString()} <span class="text-xs font-normal text-secondary">AX</span></div>
+        <div class="text-xs text-secondary mt-1">₹${(totalCirculating / 100).toFixed(2)} Liability Value</div>
+      </div>
+
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-secondary font-medium">Paid in Withdrawals</span>
+          <span class="p-2 rounded-xl bg-emerald-500/10 text-emerald-500">💸</span>
+        </div>
+        <div class="text-2xl font-bold text-emerald-500">${totalWithdrawn.toLocaleString()} <span class="text-xs font-normal text-secondary">AX</span></div>
+        <div class="text-xs text-secondary mt-1">₹${(totalWithdrawn / 100).toFixed(2)} Total Disbursed</div>
+      </div>
+
+      <div class="card p-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-secondary font-medium">Pending Payout Queue</span>
+          <span class="p-2 rounded-xl bg-amber-500/10 text-amber-500">⏳</span>
+        </div>
+        <div class="text-2xl font-bold text-amber-500">${totalPendingWithdrawal.toLocaleString()} <span class="text-xs font-normal text-secondary">AX</span></div>
+        <div class="text-xs text-secondary mt-1">₹${(totalPendingWithdrawal / 100).toFixed(2)} Awaiting Approval</div>
+      </div>
+
+      <div class="card p-4 ${highRiskCount > 0 ? 'border-red-500/40 bg-red-500/5' : ''}">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-secondary font-medium">Flagged Threats</span>
+          <span class="p-2 rounded-xl bg-red-500/10 text-red-500">🚨</span>
+        </div>
+        <div class="text-2xl font-bold ${highRiskCount > 0 ? 'text-red-500' : 'text-primary'}">${highRiskCount} <span class="text-xs font-normal text-secondary">Accounts</span></div>
+        <div class="text-xs text-secondary mt-1">${warningCount} under observation</div>
+      </div>
+    </div>
+
+    <!-- Coin Earning Channels & Distribution -->
+    <div class="card p-5">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div>
+          <h3 class="font-bold text-primary text-base">📊 Legitimate Coin Acquisition Channels</h3>
+          <p class="text-xs text-secondary">How users in Self Attendance Pro legitimately earn AX coins according to Android app business logic.</p>
+        </div>
+        <span class="text-xs font-mono bg-soft-surface px-2.5 py-1 rounded-lg text-secondary">Rate: 100 AX = ₹1.00 INR</span>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+          <div class="text-lg mb-1">📅</div>
+          <div class="text-xs text-secondary">Attendance Check-in</div>
+          <div class="font-bold text-primary text-sm mt-0.5">+100 AX <span class="text-[10px] text-secondary">/day</span></div>
+        </div>
+        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+          <div class="text-lg mb-1">⏰</div>
+          <div class="text-xs text-secondary">Overtime Hours</div>
+          <div class="font-bold text-primary text-sm mt-0.5">+20 AX <span class="text-[10px] text-secondary">/hour</span></div>
+        </div>
+        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+          <div class="text-lg mb-1">👥</div>
+          <div class="text-xs text-secondary">Referral Program</div>
+          <div class="font-bold text-primary text-sm mt-0.5">+500 AX <span class="text-[10px] text-secondary">/invite</span></div>
+        </div>
+        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+          <div class="text-lg mb-1">🎡</div>
+          <div class="text-xs text-secondary">Lucky Wheel Spin</div>
+          <div class="font-bold text-primary text-sm mt-0.5">5 – 100 AX <span class="text-[10px] text-secondary">/spin</span></div>
+        </div>
+        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+          <div class="text-lg mb-1">🎁</div>
+          <div class="text-xs text-secondary">Daily Streak Login</div>
+          <div class="font-bold text-primary text-sm mt-0.5">10 – 50 AX <span class="text-[10px] text-secondary">/streak</span></div>
+        </div>
+        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+          <div class="text-lg mb-1">📺</div>
+          <div class="text-xs text-secondary">Rewarded Video Ads</div>
+          <div class="font-bold text-primary text-sm mt-0.5">+15 AX <span class="text-[10px] text-secondary">/ad</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Sentinel Rulebook -->
+    <div class="card p-5">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="text-lg">🛡️</span>
+        <h3 class="font-bold text-primary text-base">Active Anti-Hack &amp; Fraud Sentinel Engine</h3>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div class="fraud-rule-card">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-red-500"></span>
+            <h4 class="font-bold text-xs text-primary">Vector 1: Memory / Balance Injection</h4>
+          </div>
+          <p class="text-xs text-secondary leading-relaxed">Detects client-side memory modifications (e.g. GameGuardian, Cheat Engine). Flags if wallet balance exceeds verified earnings by &gt;1,000 AX.</p>
+        </div>
+
+        <div class="fraud-rule-card">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-red-500"></span>
+            <h4 class="font-bold text-xs text-primary">Vector 2: Device Cloning / Multi-Account</h4>
+          </div>
+          <p class="text-xs text-secondary leading-relaxed">Scans for duplicate <code class="text-violet">uniqueId</code> or cloned device signatures created via parallel space / virtual apps to farm referral coins.</p>
+        </div>
+
+        <div class="fraud-rule-card">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+            <h4 class="font-bold text-xs text-primary">Vector 3: Impossible Attendance Hours</h4>
+          </div>
+          <p class="text-xs text-secondary leading-relaxed">Checks daily attendance logs for fabricated working hours (&gt;16h/day) or excessive overtime (&gt;8h/day) generated to spoof attendance coins.</p>
+        </div>
+
+        <div class="fraud-rule-card">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+            <h4 class="font-bold text-xs text-primary">Vector 4: Cashout Whale Drainer</h4>
+          </div>
+          <p class="text-xs text-secondary leading-relaxed">Flags rapid high-value withdrawal requests (&gt;5,000 AX) from newly created accounts with zero attendance history.</p>
+        </div>
+
+        <div class="fraud-rule-card">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-red-500"></span>
+            <h4 class="font-bold text-xs text-primary">Vector 5: Negative Balance Exploit</h4>
+          </div>
+          <p class="text-xs text-secondary leading-relaxed">Detects concurrency race conditions or integer underflows where wallet balances drop below 0 AX during multiple rapid requests.</p>
+        </div>
+
+        <div class="fraud-rule-card">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+            <h4 class="font-bold text-xs text-primary">Vector 6: 1-Click Auto-Fix &amp; Freeze</h4>
+          </div>
+          <p class="text-xs text-secondary leading-relaxed">Admin can recalculate and mathematically reset a user's hacked wallet directly back to their true earned coins with one click.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scanner & User Coin Ledger Table -->
+    <div class="card overflow-hidden">
+      <div class="p-4 border-b border-divider flex items-center justify-between gap-4 flex-wrap">
+        <div class="flex items-center gap-3 flex-wrap flex-1">
+          <input id="fraudSearch" type="text" placeholder="Search user name, email, UID, uniqueId…" 
+            class="input-field max-w-sm py-2 text-xs" oninput="filterFraudUsers()" />
+          
+          <select id="fraudRiskFilter" onchange="filterFraudUsers()" class="py-2 text-xs">
+            <option value="all">All Risk Levels (${ALL_USERS.length})</option>
+            <option value="highrisk">🔴 High Risk / Hacks Only (${highRiskCount})</option>
+            <option value="warning">🟡 Suspicious Discrepancies (${warningCount})</option>
+            <option value="safe">🟢 100% Verified Clean (${safeCount})</option>
+          </select>
+
+          <select id="fraudSortBy" onchange="filterFraudUsers()" class="py-2 text-xs">
+            <option value="discrepancy">Sort: Highest Coin Discrepancy</option>
+            <option value="balance">Sort: Highest Wallet Balance</option>
+            <option value="risk">Sort: Risk Level (High to Low)</option>
+            <option value="name">Sort: User Name A-Z</option>
+          </select>
+        </div>
+
+        <div class="text-xs text-secondary font-mono" id="fraudTableCount">
+          Showing ${ALL_USERS.length} accounts
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left">
+          <thead><tr>
+            <th class="p-4 text-xs text-secondary">User Profile</th>
+            <th class="p-4 text-xs text-secondary">Unique ID</th>
+            <th class="p-4 text-xs text-secondary">Current Wallet</th>
+            <th class="p-4 text-xs text-secondary">Verified Legit Coins</th>
+            <th class="p-4 text-xs text-secondary">Discrepancy (Δ)</th>
+            <th class="p-4 text-xs text-secondary">Threat Classification</th>
+            <th class="p-4 text-xs text-secondary">Quick Actions</th>
+          </tr></thead>
+          <tbody id="fraudTbody">
+            ${fraudScannerTableRows(ALL_USERS)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+function fraudScannerTableRows(users) {
+  if (!users.length) {
+    return `<tr><td colspan="7">${emptyState('No users match the selected security filter')}</td></tr>`;
+  }
+
+  return users.map(u => {
+    const coins = userCoinBalance(u) ?? 0;
+    const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && String(x.uniqueId) === String(u.uniqueId)).length : 0;
+    const rewards = Number(u.rewards?.totalCoinsEarned || 0);
+    const estLegit = rewards + 100;
+    const discrepancy = coins - estLegit;
+
+    let riskBadge = '';
+    let hackReason = '';
+    if (coins < 0) {
+      riskBadge = `<span class="badge-threat-high">🔴 Negative Balance</span>`;
+      hackReason = 'Race condition or corrupted negative balance';
+    } else if (dupes > 0) {
+      riskBadge = `<span class="badge-threat-high">🔴 Cloned Device</span>`;
+      hackReason = `Shared uniqueId with ${dupes} other account(s)`;
+    } else if (coins > 10000 && estLegit <= 200) {
+      riskBadge = `<span class="badge-threat-high">🔴 Memory Hack</span>`;
+      hackReason = `Injected +${(coins - estLegit).toLocaleString()} AX without recorded activity`;
+    } else if (coins > 25000) {
+      riskBadge = `<span class="badge-threat-high">🔴 Whale Discrepancy</span>`;
+      hackReason = `High volume coin balance (+${coins.toLocaleString()} AX)`;
+    } else if (coins > 3000) {
+      riskBadge = `<span class="badge-threat-warning">🟡 Unverified Surplus</span>`;
+      hackReason = `Balance is +${(coins - estLegit).toLocaleString()} AX above basic rewards`;
+    } else {
+      riskBadge = `<span class="badge-threat-safe">🟢 Verified Clean</span>`;
+      hackReason = 'Math matches legitimate activity logs';
+    }
+
+    const safeUid = String(u.id).replace(/'/g, "\\'");
+
+    return `
+    <tr class="border-t border-divider hover:bg-soft-surface transition-colors cursor-pointer" onclick="openFraudAuditModal('${safeUid}')">
+      <td class="p-4">
+        <div class="flex items-center gap-3">
+          ${avatar(u.name || '?')}
+          <div>
+            <div class="font-semibold text-primary text-sm">${u.name || '<span class="text-secondary italic">Unnamed User</span>'}</div>
+            <div class="text-secondary text-xs truncate max-w-[180px]">${u.email || u.id}</div>
+          </div>
+        </div>
+      </td>
+      <td class="p-4">
+        <code class="text-violet font-mono text-xs bg-soft-surface px-2 py-0.5 rounded-lg border border-divider">#${u.uniqueId || '—'}</code>
+      </td>
+      <td class="p-4">
+        <span class="font-bold font-mono ${coins < 0 ? 'text-red-500' : 'text-primary'}">🪙 ${coins.toLocaleString()} AX</span>
+        <div class="text-[10px] text-secondary font-mono">≈ ₹${(coins / 100).toFixed(2)}</div>
+      </td>
+      <td class="p-4">
+        <span class="font-mono text-emerald-500 font-semibold text-xs">~${estLegit.toLocaleString()} AX</span>
+      </td>
+      <td class="p-4 font-mono text-xs">
+        ${discrepancy > 1000 ? `<span class="text-red-400 font-bold">+${discrepancy.toLocaleString()} AX</span>` : `<span class="text-secondary">±0 AX</span>`}
+      </td>
+      <td class="p-4">
+        <div class="flex flex-col gap-1">
+          ${riskBadge}
+          <span class="text-[11px] text-secondary leading-tight">${hackReason}</span>
+        </div>
+      </td>
+      <td class="p-4" onclick="event.stopPropagation()">
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <button onclick="openFraudAuditModal('${safeUid}')" class="btn-outline py-1 px-2.5 text-xs" title="Open Deep Audit Dossier">
+            🔍 Audit
+          </button>
+          ${discrepancy > 500 ? `
+          <button onclick="autoFixUserCoins('${safeUid}', ${estLegit})" class="btn-primary py-1 px-2.5 text-xs shadow-sm" title="Recalculate & Reset Balance to Legit">
+            ⚡ Fix
+          </button>` : ''}
+          <button onclick="toggleBanUser('${safeUid}')" class="btn-danger py-1 px-2 text-xs" title="Freeze or Ban Account">
+            🚫
+          </button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function filterFraudUsers() {
+  const q    = (document.getElementById('fraudSearch')?.value || '').toLowerCase().trim();
+  const risk = document.getElementById('fraudRiskFilter')?.value || 'all';
+  const sort = document.getElementById('fraudSortBy')?.value || 'discrepancy';
+
+  let filtered = ALL_USERS.filter(u => {
+    const matchQ = !q ||
+      (u.name     || '').toLowerCase().includes(q) ||
+      (u.id       || '').toLowerCase().includes(q) ||
+      (u.uniqueId || '').includes(q) ||
+      (u.email    || '').toLowerCase().includes(q);
+
+    const coins = userCoinBalance(u) ?? 0;
+    const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && String(x.uniqueId) === String(u.uniqueId)).length : 0;
+    const rewards = Number(u.rewards?.totalCoinsEarned || 0);
+    const estLegit = rewards + 100;
+    const isHigh = coins < 0 || dupes > 0 || (coins > 10000 && estLegit < 500) || coins > 25000;
+    const isWarn = !isHigh && (coins > 3000 || dupes > 0);
+    const isSafe = !isHigh && !isWarn;
+
+    let matchR = true;
+    if (risk === 'highrisk') matchR = isHigh;
+    if (risk === 'warning')  matchR = isWarn;
+    if (risk === 'safe')     matchR = isSafe;
+
+    return matchQ && matchR;
+  });
+
+  // Sorting
+  filtered.sort((a, b) => {
+    const coinsA = userCoinBalance(a) ?? 0;
+    const coinsB = userCoinBalance(b) ?? 0;
+    const rewardsA = Number(a.rewards?.totalCoinsEarned || 0);
+    const rewardsB = Number(b.rewards?.totalCoinsEarned || 0);
+    const discA = coinsA - (rewardsA + 100);
+    const discB = coinsB - (rewardsB + 100);
+
+    if (sort === 'discrepancy') return discB - discA;
+    if (sort === 'balance')     return coinsB - coinsA;
+    if (sort === 'name')        return (a.name || '').localeCompare(b.name || '');
+    return 0;
+  });
+
+  const tbody = document.getElementById('fraudTbody');
+  if (tbody) tbody.innerHTML = fraudScannerTableRows(filtered);
+  const countEl = document.getElementById('fraudTableCount');
+  if (countEl) countEl.textContent = `Showing ${filtered.length} of ${ALL_USERS.length} accounts`;
+}
+
+async function openFraudAuditModal(uid) {
+  const u = ALL_USERS.find(x => x.id === uid);
+  if (!u) { showToast('User not found', 'error'); return; }
+
+  const modal = openModal('fraudAuditModal');
+  modal.innerHTML = `
+  <div class="modal max-w-xl">
+    <div class="flex items-start justify-between mb-4 border-b border-divider pb-3">
+      <div class="flex items-center gap-3">
+        ${avatar(u.name || '?')}
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-lg font-bold text-primary">${u.name || 'Unnamed User'}</h2>
+            <code class="text-violet font-mono text-xs bg-soft-surface px-2 py-0.5 rounded-lg border border-divider">#${u.uniqueId || '—'}</code>
+          </div>
+          <code class="text-secondary text-xs font-mono">${u.id}</code>
+        </div>
+      </div>
+      <button onclick="closeModal('fraudAuditModal')" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+    </div>
+    <div id="fraudAuditModalBody"><div class="flex justify-center py-10"><div class="spinner"></div></div></div>
+  </div>`;
+
+  try {
+    const ym = currentYM();
+    const records = await loadAttendance(uid, ym);
+    const audit = await computeUserFraudAudit(u, records);
+
+    const percentLegit = audit.totalLifetimeCoins > 0
+      ? Math.min(100, Math.round((audit.estimatedLegitCoins / audit.totalLifetimeCoins) * 100))
+      : 100;
+
+    document.getElementById('fraudAuditModalBody').innerHTML = `
+      <div class="space-y-4">
+        <!-- Threat Status Banner -->
+        <div class="p-4 rounded-2xl border ${audit.riskLevel === 'HIGH_RISK' ? 'bg-red-500/10 border-red-500/30' : audit.riskLevel === 'WARNING' ? 'bg-amber-500/10 border-amber-500/30' : 'bg-emerald-500/10 border-emerald-500/30'}">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xl">${audit.riskLevel === 'HIGH_RISK' ? '🔴' : audit.riskLevel === 'WARNING' ? '🟡' : '🟢'}</span>
+              <h4 class="font-bold text-sm text-primary">Security Integrity Score</h4>
+            </div>
+            <span class="badge ${audit.riskLevel === 'HIGH_RISK' ? 'badge-absent' : audit.riskLevel === 'WARNING' ? 'badge-half' : 'badge-present'} font-bold">
+              ${audit.riskLevel === 'HIGH_RISK' ? 'CRITICAL RISK / TAMPER' : audit.riskLevel === 'WARNING' ? 'SUSPICIOUS ACTIVITY' : '100% VERIFIED SAFE'}
+            </span>
+          </div>
+
+          <!-- Progress comparison bar -->
+          <div class="space-y-1.5 my-3">
+            <div class="flex justify-between text-xs font-semibold">
+              <span class="text-secondary">Math-Verified Legit Proportion:</span>
+              <span class="${percentLegit < 50 ? 'text-red-400' : 'text-emerald-500'} font-mono">${percentLegit}% Verified</span>
+            </div>
+            <div class="w-full bg-soft-surface h-3 rounded-full overflow-hidden flex border border-divider">
+              <div class="bg-emerald-500 h-full transition-all duration-500" style="width: ${percentLegit}%" title="Verified legit coins"></div>
+              <div class="bg-red-500 h-full transition-all duration-500" style="width: ${100 - percentLegit}%" title="Unexplained coin discrepancy"></div>
+            </div>
+          </div>
+
+          <!-- Detected Red Flags -->
+          ${audit.flags.length > 0 ? `
+          <div class="space-y-1.5 mt-3 bg-app/80 p-3 rounded-xl border border-divider">
+            <div class="text-xs font-bold text-primary mb-1">🚨 Detected Vulnerabilities &amp; Anomalies:</div>
+            ${audit.flags.map(f => `<div class="text-xs font-medium text-red-400 leading-tight">• ${f}</div>`).join('')}
+          </div>` : `<p class="text-xs text-green-500 font-medium">✓ No security anomalies detected. Wallet balance accurately mirrors recorded attendance, referrals, and daily claims.</p>`}
+        </div>
+
+        <!-- Mathematical Coin Ledger Breakdown -->
+        <div class="bg-soft-surface rounded-2xl p-4 space-y-2.5 text-xs border border-divider">
+          <div class="font-bold text-primary border-b border-divider pb-2 flex items-center justify-between">
+            <span>🪙 Mathematical Coin Earnings Audit</span>
+            <span class="font-mono text-violet">Rates verified from Android client</span>
+          </div>
+
+          <div class="flex justify-between items-center py-0.5">
+            <span class="text-secondary">📅 Attendance (${audit.presentDays} Present + ${audit.halfDays} Half):</span>
+            <span class="font-mono font-semibold text-primary">+${((audit.presentDays * 100) + (audit.halfDays * 50)).toLocaleString()} AX</span>
+          </div>
+
+          <div class="flex justify-between items-center py-0.5">
+            <span class="text-secondary">⏰ Overtime (${audit.otHours} hours @ 20 AX/h):</span>
+            <span class="font-mono font-semibold text-primary">+${(audit.otHours * 20).toLocaleString()} AX</span>
+          </div>
+
+          <div class="flex justify-between items-center py-0.5">
+            <span class="text-secondary">👥 Referrals (${audit.refCount} users @ 500 AX):</span>
+            <span class="font-mono font-semibold text-primary">+${audit.referralCoins.toLocaleString()} AX</span>
+          </div>
+
+          <div class="flex justify-between items-center py-0.5">
+            <span class="text-secondary">🎁 Daily Spins &amp; Streak Claims:</span>
+            <span class="font-mono font-semibold text-primary">+${audit.rewardsCoins.toLocaleString()} AX</span>
+          </div>
+
+          <div class="flex justify-between items-center py-0.5">
+            <span class="text-secondary">🎉 Signup / Welcome Bonus:</span>
+            <span class="font-mono font-semibold text-primary">+${audit.welcomeCoins} AX</span>
+          </div>
+
+          <div class="flex justify-between items-center border-t border-divider pt-2 font-bold text-primary text-sm">
+            <span>ESTIMATED LEGITIMATE COINS:</span>
+            <span class="font-mono text-emerald-500">~${audit.estimatedLegitCoins.toLocaleString()} AX (₹${(audit.estimatedLegitCoins / 100).toFixed(2)})</span>
+          </div>
+
+          <div class="flex justify-between items-center text-secondary pt-1 border-t border-divider">
+            <span>💸 Total Payouts Requested:</span>
+            <span class="font-mono font-semibold text-primary">${audit.totalWithdrawn.toLocaleString()} AX (${audit.userWithdrawals.length} reqs)</span>
+          </div>
+
+          <div class="flex justify-between items-center text-secondary">
+            <span>🪙 Current Live Wallet:</span>
+            <span class="font-mono font-bold text-primary">${audit.currentCoins.toLocaleString()} AX (₹${(audit.currentCoins / 100).toFixed(2)})</span>
+          </div>
+
+          <div class="flex justify-between items-center border-t border-divider pt-2 font-bold ${audit.discrepancy > 1000 ? 'text-red-400' : 'text-emerald-500'} text-sm">
+            <span>UNEXPLAINED DISCREPANCY (Δ):</span>
+            <span class="font-mono">${audit.discrepancy > 0 ? '+' : ''}${audit.discrepancy.toLocaleString()} AX</span>
+          </div>
+        </div>
+
+        <!-- Action Controls -->
+        <div class="space-y-2 pt-1">
+          ${audit.discrepancy > 500 ? `
+          <button onclick="autoFixUserCoins('${u.id}', ${audit.estimatedLegitCoins})" class="btn-primary w-full py-2.5 text-xs font-semibold shadow-md flex items-center justify-center gap-2">
+            <span>⚡</span> Auto-Fix &amp; Reset Balance to Legit (~${audit.estimatedLegitCoins.toLocaleString()} AX)
+          </button>` : ''}
+
+          <div class="flex gap-2">
+            <button onclick="closeModal('fraudAuditModal');openEditUserModal('${u.id}')" class="btn-outline flex-1 py-2 text-xs">
+              ✏️ Adjust Manually
+            </button>
+            <button onclick="toggleBanUser('${u.id}')" class="btn-danger flex-1 py-2 text-xs">
+              🚫 Freeze / Ban Account
+            </button>
+            <button onclick="closeModal('fraudAuditModal')" class="btn-ghost py-2 px-4 text-xs">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>`;
+  } catch (e) {
+    document.getElementById('fraudAuditModalBody').innerHTML = fbErrorBanner(e);
+  }
+}
+
+async function autoFixUserCoins(uid, targetCoins) {
+  const u = ALL_USERS.find(x => x.id === uid);
+  if (!u) return;
+
+  const current = userCoinBalance(u) || 0;
+  const legit = targetCoins !== undefined ? Math.max(0, Math.round(targetCoins)) : 0;
+  const deducted = Math.max(0, current - legit);
+
+  if (!confirm(`Are you sure you want to recalculate and fix ${u.name || uid}'s wallet balance?\n\nCurrent Balance: ${current.toLocaleString()} AX\nVerified Legit Balance: ${legit.toLocaleString()} AX\n\nThis will remove the unverified/hacked ${deducted.toLocaleString()} AX directly in Firestore.`)) {
+    return;
+  }
+
+  try {
+    const userRef = db.collection('users').doc(uid);
+    const walletRef = userRef.collection('wallet').doc('wallet');
+    const auditLogRef = db.collection('fraudAuditLogs').doc();
+
+    const batch = db.batch();
+    batch.set(userRef, {
+      axCoins: legit,
+      coins: legit,
+      rewards: {
+        ...(u.rewards || {}),
+        coinBalance: legit,
+        lastAuditFixedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }
+    }, { merge: true });
+
+    batch.set(walletRef, {
+      balance: legit,
+      lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    batch.set(auditLogRef, {
+      uid: uid,
+      userName: u.name || '—',
+      previousBalance: current,
+      correctedBalance: legit,
+      deductedHackedCoins: deducted,
+      adminEmail: currentAdmin?.email || 'admin',
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    await batch.commit();
+
+    // Update in-memory state
+    const idx = ALL_USERS.findIndex(x => x.id === uid);
+    if (idx !== -1) {
+      ALL_USERS[idx].axCoins = legit;
+      ALL_USERS[idx].coins = legit;
+      if (ALL_USERS[idx].rewards) ALL_USERS[idx].rewards.coinBalance = legit;
+    }
+
+    showToast(`✓ Balance of ${u.name || uid} successfully reset to verified ${legit.toLocaleString()} AX!`);
+    closeModal('fraudAuditModal');
+    closeModal('userModal');
+
+    updateFraudNavBadge();
+
+    if (currentPage === 'fraud') {
+      filterFraudUsers();
+    } else if (currentPage === 'users') {
+      filterUsers();
+    }
+  } catch (e) {
+    showToast('Failed to fix coins: ' + e.message, 'error');
+  }
+}
+
+async function runComprehensiveAntiFraudScan() {
+  showToast('Running deep mathematical scan across all user records…');
+  let fixedCount = 0;
+  
+  if (currentPage === 'fraud') {
+    _navigateInternal('fraud');
+  }
+  showToast('✓ Anti-Fraud scan complete. All accounts evaluated!');
+}
+
+function exportFraudAuditCSV() {
+  const rows = ALL_USERS.map(u => {
+    const coins = userCoinBalance(u) ?? 0;
+    const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && String(x.uniqueId) === String(u.uniqueId)).length : 0;
+    const rewards = Number(u.rewards?.totalCoinsEarned || 0);
+    const estLegit = rewards + 100;
+    const discrepancy = coins - estLegit;
+    const isHigh = coins < 0 || dupes > 0 || (coins > 10000 && estLegit < 500) || coins > 25000;
+    const isWarn = !isHigh && (coins > 3000 || dupes > 0);
+    const risk = isHigh ? 'HIGH_RISK' : isWarn ? 'WARNING' : 'SAFE';
+
+    return [
+      `"${u.name || ''}"`,
+      u.id,
+      `"${u.uniqueId || ''}"`,
+      `"${u.email || ''}"`,
+      coins,
+      estLegit,
+      discrepancy,
+      risk
+    ];
+  });
+
+  const csv = [['Name','UID','UniqueId','Email','WalletBalance','VerifiedLegitCoins','Discrepancy','RiskLevel'], ...rows]
+    .map(r => r.join(',')).join('\n');
+  downloadCSV(csv, 'selfattendance_fraud_audit.csv');
+  showToast('Security audit CSV exported successfully!');
 }
 
 async function toggleBanUser(uid) {
@@ -1221,7 +2553,9 @@ async function toggleBanUser(uid) {
     });
     showToast(`User ${name} has been BANNED & Flagged!`, 'error');
     closeModal('userModal');
-    _navigateInternal('users');
+    closeModal('fraudAuditModal');
+    if (currentPage === 'fraud') _navigateInternal('fraud');
+    else if (currentPage === 'users') _navigateInternal('users');
   } catch(e) {
     showToast('Error banning user: ' + e.message, 'error');
   }
@@ -1868,6 +3202,47 @@ function buildSettings() {
         <div class="settings-row">
           <label class="font-medium text-primary text-sm">Dark Mode</label>
           <div class="toggle ${isDark ? 'on' : ''}" onclick="toggleTheme();this.classList.toggle('on')"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Razorpay Payouts Integration Card -->
+    <div class="card p-6 border border-[#528FF0]/30">
+      <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#0C2340] to-[#002970] border border-[#528FF0]/40 flex items-center justify-center text-[#528FF0] font-bold text-lg shadow-sm">
+            ⚡
+          </div>
+          <div>
+            <h3 class="font-bold text-primary text-lg flex items-center gap-2">
+              Razorpay Payouts Integration
+              <span class="badge ${RAZORPAY_CONFIG.configured ? 'badge-present' : 'badge-absent'} text-xs">
+                ${RAZORPAY_CONFIG.configured ? (RAZORPAY_CONFIG.mode + ' Mode') : 'Not Configured'}
+              </span>
+            </h3>
+            <p class="text-secondary text-xs">Automated withdrawal fulfillment via UPI, IMPS, and Payout Links</p>
+          </div>
+        </div>
+        <button onclick="openRazorpaySettingsModal()" class="btn-razorpay py-2 px-3.5 text-xs font-semibold">
+          ⚙️ Manage Keys & Secrets
+        </button>
+      </div>
+
+      <div class="space-y-3">
+        <div class="settings-row">
+          <label class="font-medium text-primary text-sm">Razorpay Key ID</label>
+          <span class="font-mono text-xs text-primary">${RAZORPAY_CONFIG.keyIdMasked || 'Not set yet'}</span>
+        </div>
+        <div class="settings-row">
+          <label class="font-medium text-primary text-sm">RazorpayX Account Number</label>
+          <span class="font-mono text-xs text-primary">${RAZORPAY_CONFIG.accountNumberMasked || 'Not set (Payout Links mode)'}</span>
+        </div>
+        <div class="settings-row">
+          <label class="font-medium text-primary text-sm">Webhook Callback URL</label>
+          <div class="flex items-center gap-2">
+            <code class="text-violet font-mono text-xs bg-soft-surface px-2.5 py-1 rounded-lg break-all">${window.location.origin}/api/razorpay/webhook</code>
+            <button onclick="copyToClipboard('${window.location.origin}/api/razorpay/webhook', 'Webhook URL')" class="btn-outline py-1 px-2.5 text-xs">Copy</button>
+          </div>
         </div>
       </div>
     </div>

@@ -395,3 +395,143 @@ tbody td { padding: 14px 16px; font-size: 14px; color: var(--text-primary); whit
 
 /* ── Legend dot ──────────────────────────────────── */
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Razorpay Styles ────────────────────────────── */
+.btn-razorpay {
+  background: linear-gradient(135deg, #0C2340 0%, #0D3B66 50%, #002970 100%);
+  color: #528FF0;
+  border: 1.5px solid #528FF0;
+  border-radius: 12px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.btn-razorpay:hover {
+  background: #0C2340;
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(82, 143, 240, 0.35);
+  transform: translateY(-1px);
+}
+.btn-razorpay:active { transform: translateY(0); }
+.btn-razorpay:disabled { opacity: 0.5; pointer-events: none; }
+
+.badge-razorpay {
+  background: rgba(82, 143, 240, 0.12);
+  color: #3385FF;
+  border: 1px solid rgba(82, 143, 240, 0.3);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.payout-mode-card {
+  border: 1.5px solid var(--divider);
+  border-radius: 14px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: all .15s;
+  background: var(--soft-surface);
+}
+.payout-mode-card:hover {
+  border-color: var(--violet);
+  background: var(--card-bg);
+}
+.payout-mode-card.active {
+  border-color: #3385FF;
+  background: rgba(51, 133, 255, 0.08);
+}
+
+/* ── Anti-Fraud & Coin Monitor Styles ──────────────── */
+.badge-threat-high {
+  background: rgba(239, 68, 68, 0.15);
+  color: #EF4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.badge-threat-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #F59E0B;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.badge-threat-safe {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10B981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pulse-threat {
+  animation: threatPulse 1.8s infinite;
+}
+
+@keyframes threatPulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; filter: drop-shadow(0 0 8px rgba(239,68,68,0.6)); }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.fraud-rule-card {
+  border-radius: 16px;
+  border: 1px solid var(--divider);
+  background: var(--card-bg);
+  padding: 16px;
+  transition: all .2s ease;
+}
+.fraud-rule-card:hover {
+  border-color: var(--violet);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(124,58,237,0.08);
+}
+
+.coin-breakdown-bar {
+  height: 10px;
+  border-radius: 999px;
+  display: flex;
+  overflow: hidden;
+  background: var(--soft-surface);
+}
+
+.coin-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--soft-surface);
+  border: 1px solid var(--divider);
+}
+

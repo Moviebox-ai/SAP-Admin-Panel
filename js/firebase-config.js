@@ -208,7 +208,8 @@ async function loadAllUsers() {
     ALL_USERS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     const countEl = document.getElementById('navUserCount');
     if (countEl) countEl.textContent = ALL_USERS.length;
-    if (['dashboard','users','salary','analytics'].includes(currentPage)) {
+    if (typeof updateFraudNavBadge === 'function') updateFraudNavBadge();
+    if (['dashboard','users','salary','analytics','fraud'].includes(currentPage)) {
       _navigateInternal(currentPage);
     }
   } catch (e) {
