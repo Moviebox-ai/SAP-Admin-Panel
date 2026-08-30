@@ -45,16 +45,13 @@
       </div>
 
       <div class="card p-6 sm:p-8 shadow-xl">
-        <!-- Auth Mode Tabs -->
+        <!-- Auth Mode Tabs (Sign In / Reset Link only, no public registration) -->
         <div class="flex bg-soft-surface p-1 rounded-xl mb-6">
           <button id="tabSignIn" onclick="switchAuthMode('signin')" class="flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm">
             Sign In
           </button>
-          <button id="tabRegister" onclick="switchAuthMode('register')" class="flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all text-secondary hover:text-primary">
-            Set Password
-          </button>
           <button id="tabReset" onclick="switchAuthMode('reset')" class="flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all text-secondary hover:text-primary">
-            Reset Link
+            Forgot Password
           </button>
         </div>
 
@@ -76,12 +73,6 @@
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </button>
             </div>
-          </div>
-
-          <!-- Confirm Password (Only in Register mode) -->
-          <div id="confirmPasswordGroup" class="hidden">
-            <label class="block text-xs font-semibold text-secondary uppercase tracking-wider mb-2">Confirm Password</label>
-            <input id="loginConfirmPassword" type="password" class="input-field text-sm" placeholder="••••••••" />
           </div>
         </div>
 

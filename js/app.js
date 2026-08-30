@@ -32,43 +32,31 @@ async function fetchRazorpayConfig() {
 }
 fetchRazorpayConfig();
 
-// ── Auth Mode Switcher ─────────────────────────────────────────
+// ── Auth Mode Switcher (Sign In vs Forgot Password only) ────────
 function switchAuthMode(mode) {
-  currentAuthMode = mode;
+  currentAuthMode = (mode === 'reset') ? 'reset' : 'signin';
   const tabIn = document.getElementById('tabSignIn');
-  const tabReg = document.getElementById('tabRegister');
   const tabRes = document.getElementById('tabReset');
   const passGroup = document.getElementById('passwordGroup');
-  const confirmGroup = document.getElementById('confirmPasswordGroup');
-  const forgotLink = document.getElementById('forgotPassLink');
   const btn = document.getElementById('loginBtn');
   const errEl = document.getElementById('loginError');
 
   if (errEl) errEl.classList.add('hidden');
 
   // Reset tab styles
-  [tabIn, tabReg, tabRes].forEach(tab => {
+  [tabIn, tabRes].forEach(tab => {
     if (tab) {
       tab.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all text-secondary hover:text-primary';
     }
   });
 
-  if (mode === 'signin') {
+  if (currentAuthMode === 'signin') {
     if (tabIn) tabIn.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm';
     if (passGroup) passGroup.classList.remove('hidden');
-    if (confirmGroup) confirmGroup.classList.add('hidden');
-    if (forgotLink) forgotLink.classList.remove('hidden');
     if (btn) btn.textContent = 'Sign In with Firebase';
-  } else if (mode === 'register') {
-    if (tabReg) tabReg.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm';
-    if (passGroup) passGroup.classList.remove('hidden');
-    if (confirmGroup) confirmGroup.classList.remove('hidden');
-    if (forgotLink) forgotLink.classList.add('hidden');
-    if (btn) btn.textContent = 'Set Password & Register Admin';
-  } else if (mode === 'reset') {
+  } else if (currentAuthMode === 'reset') {
     if (tabRes) tabRes.className = 'flex-1 py-2 text-xs sm:text-sm font-semibold rounded-lg transition-all bg-white text-primary shadow-sm';
     if (passGroup) passGroup.classList.add('hidden');
-    if (confirmGroup) confirmGroup.classList.add('hidden');
     if (btn) btn.textContent = 'Send Password Reset Email';
   }
 }
@@ -77,8 +65,6 @@ function switchAuthMode(mode) {
 async function submitAuthForm() {
   if (currentAuthMode === 'signin') {
     await handleLogin();
-  } else if (currentAuthMode === 'register') {
-    await handleSignUp();
   } else if (currentAuthMode === 'reset') {
     await handleForgotPassword();
   }
@@ -112,10 +98,10 @@ async function handleLogin() {
     let errorHtml = '';
     if (e.code === 'auth/user-not-found') {
       errorHtml = `
-        <div class="font-semibold">No account found with this email in Firebase Auth.</div>
-        <div class="text-xs mt-1">If this is your first time, you need to create your admin password:</div>
+        <div class="font-semibold">No authorized admin account found with this email.</div>
+        <div class="text-xs mt-1">If you are the admin and forgot your credentials, click below to receive a secure password reset email:</div>
         <div class="mt-2 flex gap-2">
-          <button onclick="switchAuthMode('register')" class="bg-violet text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-violet-dark transition-colors">Create / Set Password Now →</button>
+          <button onclick="switchAuthMode('reset');submitAuthForm()" class="bg-violet text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-violet-dark transition-colors">Send Reset Link to Email →</button>
         </div>
       `;
     } else if (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
@@ -141,56 +127,7 @@ async function handleLogin() {
   }
 }
 
-// ── Auth: Sign Up / Set Password ──────────────────────────────
-async function handleSignUp() {
-  const email = document.getElementById('loginEmail').value.trim();
-  const pass  = document.getElementById('loginPassword').value;
-  const conf  = document.getElementById('loginConfirmPassword').value;
-  const errEl = document.getElementById('loginError');
-  const btn   = document.getElementById('loginBtn');
-
-  if (!email || !pass) {
-    showAuthError('Please enter email and create a password.');
-    return;
-  }
-  if (pass.length < 6) {
-    showAuthError('Password must be at least 6 characters long.');
-    return;
-  }
-  if (pass !== conf) {
-    showAuthError('Passwords do not match. Please re-enter.');
-    return;
-  }
-
-  errEl.classList.add('hidden');
-  btn.disabled = true;
-  btn.innerHTML = '<div class="spinner spinner-sm"></div> Creating Account…';
-
-  try {
-    await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
-    const cred = await auth.createUserWithEmailAndPassword(email, pass);
-    sessionStorage.setItem('admin_session_active', '1');
-    showToast('Account created successfully! Verifying admin access…');
-    // onAuthStateChanged in firebase-config.js handles verification & navigation
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = 'Set Password & Register Admin';
-    if (e.code === 'auth/email-already-in-use') {
-      showAuthError(`
-        <div class="font-semibold">An account with this email already exists!</div>
-        <div class="text-xs mt-1">Please sign in with your password, or request a reset link:</div>
-        <div class="mt-2 flex gap-2">
-          <button onclick="switchAuthMode('signin')" class="bg-violet text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-violet-dark">Sign In →</button>
-          <button onclick="switchAuthMode('reset')" class="bg-soft-surface text-primary text-xs font-semibold px-3 py-1.5 rounded-lg border border-divider">Reset Password</button>
-        </div>
-      `);
-    } else {
-      showAuthError(`Registration error (${e.code || 'Auth'}): ${e.message}`);
-    }
-  }
-}
-
-// ── Auth: Forgot Password ─────────────────────────────────────
+// ── Auth: Forgot Password (Sends Secure Link to Admin Email) ──
 async function handleForgotPassword() {
   const email = document.getElementById('loginEmail').value.trim();
   const errEl = document.getElementById('loginError');
