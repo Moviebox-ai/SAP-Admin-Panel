@@ -73,15 +73,6 @@ function switchAuthMode(mode) {
   }
 }
 
-function quickFillEmail(email) {
-  const inp = document.getElementById('loginEmail');
-  if (inp) {
-    inp.value = email;
-    inp.focus();
-    showToast(`Email set to ${email}`);
-  }
-}
-
 // ── Main Auth Submission Dispatcher ───────────────────────────
 async function submitAuthForm() {
   if (currentAuthMode === 'signin') {
@@ -109,7 +100,10 @@ async function handleLogin() {
   btn.innerHTML = '<div class="spinner spinner-sm"></div> Signing in…';
 
   try {
+    // Ensure SESSION-only persistence before signing in
+    await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     await auth.signInWithEmailAndPassword(email, pass);
+    sessionStorage.setItem('admin_session_active', '1');
     // onAuthStateChanged in firebase-config.js handles verification & navigation
   } catch(e) {
     btn.disabled = false;
@@ -173,7 +167,9 @@ async function handleSignUp() {
   btn.innerHTML = '<div class="spinner spinner-sm"></div> Creating Account…';
 
   try {
+    await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     const cred = await auth.createUserWithEmailAndPassword(email, pass);
+    sessionStorage.setItem('admin_session_active', '1');
     showToast('Account created successfully! Verifying admin access…');
     // onAuthStateChanged in firebase-config.js handles verification & navigation
   } catch (e) {
@@ -242,9 +238,11 @@ async function handleGoogleLogin() {
   }
 
   try {
+    await auth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     await auth.signInWithPopup(provider);
+    sessionStorage.setItem('admin_session_active', '1');
     // onAuthStateChanged in firebase-config.js handles navigation
   } catch (e) {
     console.error('Google Sign-In Error:', e);
@@ -305,6 +303,9 @@ function handleLogout() {
   isDemoMode = false;
   currentAdmin = null;
   IS_ADMIN = false;
+  try {
+    sessionStorage.removeItem('admin_session_active');
+  } catch(e) {}
   if (auth) auth.signOut();
   showScreen('login');
 }
@@ -1909,8 +1910,17 @@ async function computeUserFraudAudit(u, records = []) {
   };
 }
 
+let currentFraudTab = 'scanner'; // 'scanner' | 'history'
+let selectedFraudHistoryUid = null;
+let selectedFraudHistoryYM = currentYM();
+let selectedFraudHistorySource = 'all';
+
 async function buildFraudPage() {
   updateFraudNavBadge();
+
+  if (!selectedFraudHistoryUid && ALL_USERS.length > 0) {
+    selectedFraudHistoryUid = ALL_USERS[0].id;
+  }
 
   // Aggregate ecosystem totals
   const totalCirculating = ALL_USERS.reduce((sum, u) => sum + (userCoinBalance(u) || 0), 0);
@@ -1950,7 +1960,7 @@ async function buildFraudPage() {
             ${highRiskCount > 0 ? `🚨 ${highRiskCount} High Risk Flagged` : '✓ Coin Economy Healthy'}
           </span>
         </div>
-        <p class="text-secondary text-sm">Real-time audit of user coin acquisition sources, memory-hack detection, device cloning, and balance tampering defense.</p>
+        <p class="text-secondary text-sm">Real-time audit of daily user coin acquisition, day-by-day collection logs, memory-hack detection, and tamper defense.</p>
       </div>
       <div class="flex items-center gap-2 flex-wrap">
         <button onclick="runComprehensiveAntiFraudScan()" class="btn-primary py-2 px-3 text-xs flex items-center gap-1.5 shadow-sm">
@@ -2002,153 +2012,701 @@ async function buildFraudPage() {
       </div>
     </div>
 
-    <!-- Coin Earning Channels & Distribution -->
-    <div class="card p-5">
-      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div>
-          <h3 class="font-bold text-primary text-base">📊 Legitimate Coin Acquisition Channels</h3>
-          <p class="text-xs text-secondary">How users in Self Attendance Pro legitimately earn AX coins according to Android app business logic.</p>
+    <!-- Navigation Tabs: Scanner vs User Daily History -->
+    <div class="flex items-center gap-3 border-b border-divider pb-2 flex-wrap">
+      <button onclick="switchFraudTab('scanner')" id="tabBtnFraudScanner" class="py-2 px-4 rounded-xl text-xs font-bold transition-all ${currentFraudTab === 'scanner' ? 'bg-violet text-white shadow-sm' : 'bg-soft-surface text-secondary hover:text-primary'}">
+        🛡️ Anti-Fraud Scanner &amp; Threat Rules
+      </button>
+      <button onclick="switchFraudTab('history')" id="tabBtnFraudHistory" class="py-2 px-4 rounded-xl text-xs font-bold transition-all ${currentFraudTab === 'history' ? 'bg-violet text-white shadow-sm' : 'bg-soft-surface text-secondary hover:text-primary'}">
+        📅 User Daily Coin History (Day-by-Day Ledger)
+      </button>
+    </div>
+
+    <!-- TAB 1: SCANNER & RULES -->
+    <div id="fraudScannerTabView" class="${currentFraudTab === 'scanner' ? '' : 'hidden'} space-y-6">
+      <!-- Coin Earning Channels & Distribution -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h3 class="font-bold text-primary text-base">📊 Legitimate Coin Acquisition Channels</h3>
+            <p class="text-xs text-secondary">How users legitimately earn AX coins according to Android app business logic.</p>
+          </div>
+          <span class="text-xs font-mono bg-soft-surface px-2.5 py-1 rounded-lg text-secondary">Rate: 100 AX = ₹1.00 INR</span>
         </div>
-        <span class="text-xs font-mono bg-soft-surface px-2.5 py-1 rounded-lg text-secondary">Rate: 100 AX = ₹1.00 INR</span>
+
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+            <div class="text-lg mb-1">📅</div>
+            <div class="text-xs text-secondary">Attendance Check-in</div>
+            <div class="font-bold text-primary text-sm mt-0.5">+100 AX <span class="text-[10px] text-secondary">/day</span></div>
+          </div>
+          <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+            <div class="text-lg mb-1">⏰</div>
+            <div class="text-xs text-secondary">Overtime Hours</div>
+            <div class="font-bold text-primary text-sm mt-0.5">+20 AX <span class="text-[10px] text-secondary">/hour</span></div>
+          </div>
+          <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+            <div class="text-lg mb-1">👥</div>
+            <div class="text-xs text-secondary">Referral Program</div>
+            <div class="font-bold text-primary text-sm mt-0.5">+500 AX <span class="text-[10px] text-secondary">/invite</span></div>
+          </div>
+          <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+            <div class="text-lg mb-1">🎡</div>
+            <div class="text-xs text-secondary">Lucky Wheel Spin</div>
+            <div class="font-bold text-primary text-sm mt-0.5">5 – 100 AX <span class="text-[10px] text-secondary">/spin</span></div>
+          </div>
+          <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+            <div class="text-lg mb-1">🎁</div>
+            <div class="text-xs text-secondary">Daily Streak Login</div>
+            <div class="font-bold text-primary text-sm mt-0.5">10 – 50 AX <span class="text-[10px] text-secondary">/streak</span></div>
+          </div>
+          <div class="p-3 rounded-xl bg-soft-surface border border-divider">
+            <div class="text-lg mb-1">📺</div>
+            <div class="text-xs text-secondary">Rewarded Video Ads</div>
+            <div class="font-bold text-primary text-sm mt-0.5">+15 AX <span class="text-[10px] text-secondary">/ad</span></div>
+          </div>
+        </div>
       </div>
 
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
-          <div class="text-lg mb-1">📅</div>
-          <div class="text-xs text-secondary">Attendance Check-in</div>
-          <div class="font-bold text-primary text-sm mt-0.5">+100 AX <span class="text-[10px] text-secondary">/day</span></div>
+      <!-- Active Sentinel Rulebook -->
+      <div class="card p-5">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-lg">🛡️</span>
+          <h3 class="font-bold text-primary text-base">Active Anti-Hack &amp; Fraud Sentinel Engine</h3>
         </div>
-        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
-          <div class="text-lg mb-1">⏰</div>
-          <div class="text-xs text-secondary">Overtime Hours</div>
-          <div class="font-bold text-primary text-sm mt-0.5">+20 AX <span class="text-[10px] text-secondary">/hour</span></div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div class="fraud-rule-card">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-2 h-2 rounded-full bg-red-500"></span>
+              <h4 class="font-bold text-xs text-primary">Vector 1: Memory / Balance Injection</h4>
+            </div>
+            <p class="text-xs text-secondary leading-relaxed">Detects client-side memory modifications (e.g. GameGuardian, Cheat Engine). Flags if wallet balance exceeds verified earnings by &gt;1,000 AX.</p>
+          </div>
+
+          <div class="fraud-rule-card">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-2 h-2 rounded-full bg-red-500"></span>
+              <h4 class="font-bold text-xs text-primary">Vector 2: Device Cloning / Multi-Account</h4>
+            </div>
+            <p class="text-xs text-secondary leading-relaxed">Scans for duplicate <code class="text-violet">uniqueId</code> or cloned device signatures created via parallel space / virtual apps to farm referral coins.</p>
+          </div>
+
+          <div class="fraud-rule-card">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+              <h4 class="font-bold text-xs text-primary">Vector 3: Impossible Attendance Hours</h4>
+            </div>
+            <p class="text-xs text-secondary leading-relaxed">Checks daily attendance logs for fabricated working hours (&gt;16h/day) or excessive overtime (&gt;8h/day) generated to spoof attendance coins.</p>
+          </div>
+
+          <div class="fraud-rule-card">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+              <h4 class="font-bold text-xs text-primary">Vector 4: Cashout Whale Drainer</h4>
+            </div>
+            <p class="text-xs text-secondary leading-relaxed">Flags rapid high-value withdrawal requests (&gt;5,000 AX) from newly created accounts with zero attendance history.</p>
+          </div>
+
+          <div class="fraud-rule-card">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-2 h-2 rounded-full bg-red-500"></span>
+              <h4 class="font-bold text-xs text-primary">Vector 5: Negative Balance Exploit</h4>
+            </div>
+            <p class="text-xs text-secondary leading-relaxed">Detects concurrency race conditions or integer underflows where wallet balances drop below 0 AX during multiple rapid requests.</p>
+          </div>
+
+          <div class="fraud-rule-card">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+              <h4 class="font-bold text-xs text-primary">Vector 6: 1-Click Auto-Fix &amp; Freeze</h4>
+            </div>
+            <p class="text-xs text-secondary leading-relaxed">Admin can recalculate and mathematically reset a user's hacked wallet directly back to their true earned coins with one click.</p>
+          </div>
         </div>
-        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
-          <div class="text-lg mb-1">👥</div>
-          <div class="text-xs text-secondary">Referral Program</div>
-          <div class="font-bold text-primary text-sm mt-0.5">+500 AX <span class="text-[10px] text-secondary">/invite</span></div>
+      </div>
+
+      <!-- Scanner & User Coin Ledger Table -->
+      <div class="card overflow-hidden">
+        <div class="p-4 border-b border-divider flex items-center justify-between gap-4 flex-wrap">
+          <div class="flex items-center gap-3 flex-wrap flex-1">
+            <input id="fraudSearch" type="text" placeholder="Search user name, email, UID, uniqueId…" 
+              class="input-field max-w-sm py-2 text-xs" oninput="filterFraudUsers()" />
+            
+            <select id="fraudRiskFilter" onchange="filterFraudUsers()" class="py-2 text-xs">
+              <option value="all">All Risk Levels (${ALL_USERS.length})</option>
+              <option value="highrisk">🔴 High Risk / Hacks Only (${highRiskCount})</option>
+              <option value="warning">🟡 Suspicious Discrepancies (${warningCount})</option>
+              <option value="safe">🟢 100% Verified Clean (${safeCount})</option>
+            </select>
+
+            <select id="fraudSortBy" onchange="filterFraudUsers()" class="py-2 text-xs">
+              <option value="discrepancy">Sort: Highest Coin Discrepancy</option>
+              <option value="balance">Sort: Highest Wallet Balance</option>
+              <option value="risk">Sort: Risk Level (High to Low)</option>
+              <option value="name">Sort: User Name A-Z</option>
+            </select>
+          </div>
+
+          <div class="text-xs text-secondary font-mono" id="fraudTableCount">
+            Showing ${ALL_USERS.length} accounts
+          </div>
         </div>
-        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
-          <div class="text-lg mb-1">🎡</div>
-          <div class="text-xs text-secondary">Lucky Wheel Spin</div>
-          <div class="font-bold text-primary text-sm mt-0.5">5 – 100 AX <span class="text-[10px] text-secondary">/spin</span></div>
-        </div>
-        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
-          <div class="text-lg mb-1">🎁</div>
-          <div class="text-xs text-secondary">Daily Streak Login</div>
-          <div class="font-bold text-primary text-sm mt-0.5">10 – 50 AX <span class="text-[10px] text-secondary">/streak</span></div>
-        </div>
-        <div class="p-3 rounded-xl bg-soft-surface border border-divider">
-          <div class="text-lg mb-1">📺</div>
-          <div class="text-xs text-secondary">Rewarded Video Ads</div>
-          <div class="font-bold text-primary text-sm mt-0.5">+15 AX <span class="text-[10px] text-secondary">/ad</span></div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left">
+            <thead><tr>
+              <th class="p-4 text-xs text-secondary">User Profile</th>
+              <th class="p-4 text-xs text-secondary">Unique ID</th>
+              <th class="p-4 text-xs text-secondary">Current Wallet</th>
+              <th class="p-4 text-xs text-secondary">Verified Legit Coins</th>
+              <th class="p-4 text-xs text-secondary">Discrepancy (Δ)</th>
+              <th class="p-4 text-xs text-secondary">Threat Classification</th>
+              <th class="p-4 text-xs text-secondary">Quick Actions</th>
+            </tr></thead>
+            <tbody id="fraudTbody">
+              ${fraudScannerTableRows(ALL_USERS)}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
 
-    <!-- Active Sentinel Rulebook -->
-    <div class="card p-5">
-      <div class="flex items-center gap-2 mb-3">
-        <span class="text-lg">🛡️</span>
-        <h3 class="font-bold text-primary text-base">Active Anti-Hack &amp; Fraud Sentinel Engine</h3>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        <div class="fraud-rule-card">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-red-500"></span>
-            <h4 class="font-bold text-xs text-primary">Vector 1: Memory / Balance Injection</h4>
+    <!-- TAB 2: USER DAILY COIN HISTORY (DAY-BY-DAY LEDGER) -->
+    <div id="fraudHistoryTabView" class="${currentFraudTab === 'history' ? '' : 'hidden'} space-y-6">
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-4 border-b border-divider pb-4">
+          <div class="flex items-center gap-3 flex-wrap">
+            <div>
+              <label class="text-[11px] font-semibold text-secondary uppercase block mb-1">Select User Profile</label>
+              <select id="historyUserSelect" class="py-2 px-3 text-xs min-w-[240px] font-medium" onchange="onSelectFraudHistoryUser(this.value)">
+                ${ALL_USERS.map(u => `
+                  <option value="${u.id}" ${u.id === selectedFraudHistoryUid ? 'selected' : ''}>
+                    ${u.name || 'Unnamed'} (#${u.uniqueId || '—'}) — 🪙 ${(userCoinBalance(u) || 0).toLocaleString()} AX
+                  </option>
+                `).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="text-[11px] font-semibold text-secondary uppercase block mb-1">Period (Month)</label>
+              <input type="month" id="historyMonthInput" class="input-field py-1.5 px-2.5 text-xs" value="${selectedFraudHistoryYM}" onchange="onChangeFraudHistoryMonth(this.value)">
+            </div>
+
+            <div>
+              <label class="text-[11px] font-semibold text-secondary uppercase block mb-1">Filter by Source</label>
+              <select id="historySourceSelect" class="py-2 px-3 text-xs" onchange="onChangeFraudHistorySource(this.value)">
+                <option value="all" ${selectedFraudHistorySource === 'all' ? 'selected' : ''}>All Sources &amp; Withdrawals</option>
+                <option value="attendance" ${selectedFraudHistorySource === 'attendance' ? 'selected' : ''}>📅 Attendance &amp; Overtime</option>
+                <option value="referral" ${selectedFraudHistorySource === 'referral' ? 'selected' : ''}>👥 Referral Bonuses</option>
+                <option value="rewards" ${selectedFraudHistorySource === 'rewards' ? 'selected' : ''}>🎡 Spins &amp; Daily Streaks</option>
+                <option value="withdrawals" ${selectedFraudHistorySource === 'withdrawals' ? 'selected' : ''}>💸 Withdrawals (Debits)</option>
+              </select>
+            </div>
           </div>
-          <p class="text-xs text-secondary leading-relaxed">Detects client-side memory modifications (e.g. GameGuardian, Cheat Engine). Flags if wallet balance exceeds verified earnings by &gt;1,000 AX.</p>
-        </div>
 
-        <div class="fraud-rule-card">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-red-500"></span>
-            <h4 class="font-bold text-xs text-primary">Vector 2: Device Cloning / Multi-Account</h4>
+          <div class="flex items-center gap-2">
+            <button onclick="exportUserDailyHistoryCSV('${selectedFraudHistoryUid}', '${selectedFraudHistoryYM}')" class="btn-outline py-2 px-3 text-xs flex items-center gap-1.5">
+              <span>📥</span> Export Daily History CSV
+            </button>
+            <button onclick="renderUserDailyHistoryView()" class="btn-primary py-2 px-3 text-xs flex items-center gap-1.5 shadow-sm">
+              <span>↻</span> Reload History
+            </button>
           </div>
-          <p class="text-xs text-secondary leading-relaxed">Scans for duplicate <code class="text-violet">uniqueId</code> or cloned device signatures created via parallel space / virtual apps to farm referral coins.</p>
         </div>
 
-        <div class="fraud-rule-card">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-            <h4 class="font-bold text-xs text-primary">Vector 3: Impossible Attendance Hours</h4>
-          </div>
-          <p class="text-xs text-secondary leading-relaxed">Checks daily attendance logs for fabricated working hours (&gt;16h/day) or excessive overtime (&gt;8h/day) generated to spoof attendance coins.</p>
+        <div id="fraudUserDailyHistoryContainer">
+          <div class="flex justify-center py-12"><div class="spinner"></div></div>
         </div>
-
-        <div class="fraud-rule-card">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-            <h4 class="font-bold text-xs text-primary">Vector 4: Cashout Whale Drainer</h4>
-          </div>
-          <p class="text-xs text-secondary leading-relaxed">Flags rapid high-value withdrawal requests (&gt;5,000 AX) from newly created accounts with zero attendance history.</p>
-        </div>
-
-        <div class="fraud-rule-card">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-red-500"></span>
-            <h4 class="font-bold text-xs text-primary">Vector 5: Negative Balance Exploit</h4>
-          </div>
-          <p class="text-xs text-secondary leading-relaxed">Detects concurrency race conditions or integer underflows where wallet balances drop below 0 AX during multiple rapid requests.</p>
-        </div>
-
-        <div class="fraud-rule-card">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
-            <h4 class="font-bold text-xs text-primary">Vector 6: 1-Click Auto-Fix &amp; Freeze</h4>
-          </div>
-          <p class="text-xs text-secondary leading-relaxed">Admin can recalculate and mathematically reset a user's hacked wallet directly back to their true earned coins with one click.</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Scanner & User Coin Ledger Table -->
-    <div class="card overflow-hidden">
-      <div class="p-4 border-b border-divider flex items-center justify-between gap-4 flex-wrap">
-        <div class="flex items-center gap-3 flex-wrap flex-1">
-          <input id="fraudSearch" type="text" placeholder="Search user name, email, UID, uniqueId…" 
-            class="input-field max-w-sm py-2 text-xs" oninput="filterFraudUsers()" />
-          
-          <select id="fraudRiskFilter" onchange="filterFraudUsers()" class="py-2 text-xs">
-            <option value="all">All Risk Levels (${ALL_USERS.length})</option>
-            <option value="highrisk">🔴 High Risk / Hacks Only (${highRiskCount})</option>
-            <option value="warning">🟡 Suspicious Discrepancies (${warningCount})</option>
-            <option value="safe">🟢 100% Verified Clean (${safeCount})</option>
-          </select>
-
-          <select id="fraudSortBy" onchange="filterFraudUsers()" class="py-2 text-xs">
-            <option value="discrepancy">Sort: Highest Coin Discrepancy</option>
-            <option value="balance">Sort: Highest Wallet Balance</option>
-            <option value="risk">Sort: Risk Level (High to Low)</option>
-            <option value="name">Sort: User Name A-Z</option>
-          </select>
-        </div>
-
-        <div class="text-xs text-secondary font-mono" id="fraudTableCount">
-          Showing ${ALL_USERS.length} accounts
-        </div>
-      </div>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-left">
-          <thead><tr>
-            <th class="p-4 text-xs text-secondary">User Profile</th>
-            <th class="p-4 text-xs text-secondary">Unique ID</th>
-            <th class="p-4 text-xs text-secondary">Current Wallet</th>
-            <th class="p-4 text-xs text-secondary">Verified Legit Coins</th>
-            <th class="p-4 text-xs text-secondary">Discrepancy (Δ)</th>
-            <th class="p-4 text-xs text-secondary">Threat Classification</th>
-            <th class="p-4 text-xs text-secondary">Quick Actions</th>
-          </tr></thead>
-          <tbody id="fraudTbody">
-            ${fraudScannerTableRows(ALL_USERS)}
-          </tbody>
-        </table>
       </div>
     </div>
   </div>`;
 }
+
+function switchFraudTab(tab) {
+  currentFraudTab = tab;
+  const scannerView = document.getElementById('fraudScannerTabView');
+  const historyView = document.getElementById('fraudHistoryTabView');
+  const btnScanner  = document.getElementById('tabBtnFraudScanner');
+  const btnHistory  = document.getElementById('tabBtnFraudHistory');
+
+  if (scannerView && historyView) {
+    if (tab === 'scanner') {
+      scannerView.classList.remove('hidden');
+      historyView.classList.add('hidden');
+      btnScanner.className = 'py-2 px-4 rounded-xl text-xs font-bold transition-all bg-violet text-white shadow-sm';
+      btnHistory.className = 'py-2 px-4 rounded-xl text-xs font-bold transition-all bg-soft-surface text-secondary hover:text-primary';
+    } else {
+      scannerView.classList.add('hidden');
+      historyView.classList.remove('hidden');
+      btnHistory.className = 'py-2 px-4 rounded-xl text-xs font-bold transition-all bg-violet text-white shadow-sm';
+      btnScanner.className = 'py-2 px-4 rounded-xl text-xs font-bold transition-all bg-soft-surface text-secondary hover:text-primary';
+      renderUserDailyHistoryView();
+    }
+  }
+}
+
+function onSelectFraudHistoryUser(uid) {
+  selectedFraudHistoryUid = uid;
+  renderUserDailyHistoryView();
+}
+
+function onChangeFraudHistoryMonth(ym) {
+  selectedFraudHistoryYM = ym;
+  renderUserDailyHistoryView();
+}
+
+function onChangeFraudHistorySource(src) {
+  selectedFraudHistorySource = src;
+  renderUserDailyHistoryView();
+}
+
+async function renderUserDailyHistoryView() {
+  const container = document.getElementById('fraudUserDailyHistoryContainer');
+  if (!container) return;
+
+  const uid = selectedFraudHistoryUid;
+  const ym  = selectedFraudHistoryYM || currentYM();
+  const u   = ALL_USERS.find(x => x.id === uid);
+
+  if (!u) {
+    container.innerHTML = emptyState('Select a user to view their daily coin collection history');
+    return;
+  }
+
+  container.innerHTML = `<div class="flex justify-center py-12"><div class="spinner"></div></div>`;
+
+  try {
+    const records = await loadAttendance(uid, ym);
+    const ledger = await compileUserDailyLedger(u, ym, records);
+
+    let filteredEntries = ledger.entries;
+    if (selectedFraudHistorySource !== 'all') {
+      filteredEntries = filteredEntries.filter(e => e.category === selectedFraudHistorySource);
+    }
+
+    const currentBal = userCoinBalance(u) || 0;
+
+    container.innerHTML = `
+      <div class="space-y-6">
+        <!-- User Summary Strip -->
+        <div class="flex items-center justify-between p-4 rounded-2xl bg-soft-surface border border-divider gap-4 flex-wrap">
+          <div class="flex items-center gap-3">
+            ${avatar(u.name || '?')}
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-bold text-primary text-base">${u.name || 'Unnamed User'}</h3>
+                <code class="text-violet font-mono text-xs bg-app px-2 py-0.5 rounded-lg border border-divider">#${u.uniqueId || '—'}</code>
+                ${u.role === 'admin' ? '<span class="badge badge-present text-[10px]">Admin</span>' : ''}
+              </div>
+              <div class="text-xs text-secondary">${u.email || u.id}</div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-4 flex-wrap text-xs">
+            <div class="p-2.5 rounded-xl bg-app border border-divider">
+              <span class="text-secondary block">Total Days Present</span>
+              <span class="font-bold text-primary font-mono text-sm">${ledger.presentDaysCount} Days</span>
+            </div>
+            <div class="p-2.5 rounded-xl bg-app border border-divider">
+              <span class="text-secondary block">Coins Earned in ${ym}</span>
+              <span class="font-bold text-emerald-500 font-mono text-sm">+${ledger.periodEarnedCoins.toLocaleString()} AX</span>
+            </div>
+            <div class="p-2.5 rounded-xl bg-app border border-divider">
+              <span class="text-secondary block">Withdrawals in ${ym}</span>
+              <span class="font-bold text-red-400 font-mono text-sm">-${ledger.periodWithdrawnCoins.toLocaleString()} AX</span>
+            </div>
+            <div class="p-2.5 rounded-xl bg-app border border-divider">
+              <span class="text-secondary block">Live Wallet Balance</span>
+              <span class="font-bold text-violet font-mono text-sm">🪙 ${currentBal.toLocaleString()} AX</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Visual Daily Chart (Day 1 to 31) -->
+        <div class="p-4 rounded-2xl bg-soft-surface border border-divider">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-xs font-bold text-primary flex items-center gap-2">
+              <span>📊 Daily Coin Collection Activity in ${formatMonthName(ym)}</span>
+              <span class="text-[11px] text-secondary font-normal">(Day-by-Day Coin Accumulation)</span>
+            </div>
+            <div class="flex items-center gap-3 text-[11px] text-secondary">
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Attendance</span>
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-violet"></span> Referral / Streak</span>
+              <span class="flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-sm bg-red-400"></span> Withdrawal</span>
+            </div>
+          </div>
+
+          <div class="h-28 flex items-end gap-1.5 pt-4 pb-1 overflow-x-auto">
+            ${renderDailyBarColumns(ledger.dailyMap, ym)}
+          </div>
+        </div>
+
+        <!-- Day-by-Day Ledger Table -->
+        <div class="overflow-x-auto rounded-2xl border border-divider bg-card">
+          <table class="w-full text-left">
+            <thead class="bg-soft-surface/60">
+              <tr>
+                <th class="p-3.5 text-xs text-secondary font-semibold">Date &amp; Day</th>
+                <th class="p-3.5 text-xs text-secondary font-semibold">Activity &amp; Source</th>
+                <th class="p-3.5 text-xs text-secondary font-semibold">Coins Credited / Debited</th>
+                <th class="p-3.5 text-xs text-secondary font-semibold">INR Equivalent</th>
+                <th class="p-3.5 text-xs text-secondary font-semibold">Daily Total Earned</th>
+                <th class="p-3.5 text-xs text-secondary font-semibold">Anti-Fraud Validation</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredEntries.length === 0 ? `
+                <tr><td colspan="6" class="p-8 text-center text-xs text-secondary">No coin activity recorded for ${formatMonthName(ym)} with selected filter.</td></tr>
+              ` : filteredEntries.map(e => `
+                <tr class="border-t border-divider hover:bg-soft-surface/50 transition-colors">
+                  <td class="p-3.5">
+                    <div class="font-bold text-primary text-xs font-mono">${formatDateWithDay(e.date)}</div>
+                    <div class="text-[10px] text-secondary">${e.date}</div>
+                  </td>
+                  <td class="p-3.5">
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm">${e.icon}</span>
+                      <div>
+                        <div class="font-semibold text-primary text-xs">${e.title}</div>
+                        <div class="text-[11px] text-secondary">${e.description}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="p-3.5 font-mono text-xs font-bold">
+                    ${e.amount > 0 ? `<span class="text-emerald-500">+${e.amount.toLocaleString()} AX</span>` : `<span class="text-red-400">-${Math.abs(e.amount).toLocaleString()} AX</span>`}
+                  </td>
+                  <td class="p-3.5 font-mono text-xs text-secondary">
+                    ${e.amount > 0 ? `+₹${(e.amount / 100).toFixed(2)}` : `-₹${(Math.abs(e.amount) / 100).toFixed(2)}`}
+                  </td>
+                  <td class="p-3.5 font-mono text-xs text-primary font-semibold">
+                    ${e.dayTotalEarned > 0 ? `+${e.dayTotalEarned.toLocaleString()} AX` : '0 AX'}
+                  </td>
+                  <td class="p-3.5">
+                    ${e.isSuspicious 
+                      ? `<span class="badge-threat-high">🚨 Suspicious Spike</span>`
+                      : e.isInvalidHours 
+                      ? `<span class="badge-threat-high">⛔ Excessive Hours</span>`
+                      : `<span class="badge-threat-safe">✓ Verified Legit</span>`}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    container.innerHTML = fbErrorBanner(e);
+  }
+}
+
+async function compileUserDailyLedger(u, ym, records = []) {
+  const uid = u.id;
+  const entries = [];
+  const dailyMap = {};
+
+  // Days in month
+  const [year, month] = ym.split('-').map(Number);
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayStr = String(d).padStart(2, '0');
+    const dateStr = `${ym}-${dayStr}`;
+    dailyMap[dateStr] = {
+      date: dateStr,
+      dayNum: d,
+      earned: 0,
+      withdrawn: 0,
+      items: []
+    };
+  }
+
+  // 1. Process Attendance Records
+  let presentDaysCount = 0;
+  records.forEach(r => {
+    const date = r.date;
+    if (!dailyMap[date]) {
+      dailyMap[date] = { date, dayNum: Number(date.split('-')[2] || 1), earned: 0, withdrawn: 0, items: [] };
+    }
+
+    const status = String(r.status || '').toUpperCase();
+    const workedHours = Number(r.workedHours) || 0;
+    const otHours = Number(r.overtimeHours) || 0;
+
+    let baseCoins = 0;
+    let desc = '';
+
+    if (status === 'PRESENT') {
+      baseCoins = 100;
+      presentDaysCount++;
+      desc = `Full Day Present (${workedHours > 0 ? workedHours + 'h' : 'Standard shift'})`;
+    } else if (status === 'HALF' || status === 'HALF_DAY') {
+      baseCoins = 50;
+      presentDaysCount += 0.5;
+      desc = `Half Day Present (${workedHours > 0 ? workedHours + 'h' : 'Half shift'})`;
+    }
+
+    const otCoins = otHours * 20;
+    const totalDayCoins = baseCoins + otCoins;
+
+    if (totalDayCoins > 0) {
+      dailyMap[date].earned += totalDayCoins;
+      const isInvalidHours = workedHours > 16 || otHours > 10;
+
+      entries.push({
+        date,
+        category: 'attendance',
+        icon: '📅',
+        title: status === 'PRESENT' ? 'Daily Attendance Check-in' : 'Half-Day Attendance',
+        description: otHours > 0 ? `${desc} + ⏰ ${otHours}h Overtime (+${otCoins} AX)` : desc,
+        amount: totalDayCoins,
+        isInvalidHours,
+        isSuspicious: false
+      });
+    }
+  });
+
+  // 2. Process Withdrawals for this user
+  const userWithdrawals = ALL_WITHDRAWALS.filter(w => 
+    (w.userId === uid || w.uid === uid)
+  );
+
+  userWithdrawals.forEach(w => {
+    let date = ym + '-01';
+    if (w.createdAt) {
+      if (typeof w.createdAt.toDate === 'function') date = w.createdAt.toDate().toISOString().split('T')[0];
+      else if (typeof w.createdAt === 'string') date = w.createdAt.split('T')[0];
+    } else if (w.date) {
+      date = String(w.date).split('T')[0];
+    }
+
+    const amount = Number(w.amount ?? w.axCoins ?? 0);
+    if (date.startsWith(ym)) {
+      if (!dailyMap[date]) dailyMap[date] = { date, dayNum: Number(date.split('-')[2] || 1), earned: 0, withdrawn: 0, items: [] };
+      dailyMap[date].withdrawn += amount;
+
+      entries.push({
+        date,
+        category: 'withdrawals',
+        icon: '💸',
+        title: `Withdrawal Request (${w.payoutMode || w.type || 'UPI'})`,
+        description: `Status: ${String(w.status || 'Pending').toUpperCase()} • Ref: ${w.id.substring(0, 8)}`,
+        amount: -amount,
+        isInvalidHours: false,
+        isSuspicious: amount > 10000
+      });
+    }
+  });
+
+  // 3. Process Streaks, Lucky Spins & Rewards
+  if (u.rewards) {
+    const totalEarned = Number(u.rewards.totalCoinsEarned || 0);
+    const spins = Number(u.rewards.dailySpinsUsed || 0);
+    const streak = Number(u.rewards.currentStreak || 0);
+
+    if (totalEarned > 0 && ym === currentYM()) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (dailyMap[todayStr]) {
+        dailyMap[todayStr].earned += Math.min(totalEarned, 50);
+      }
+    }
+  }
+
+  // Sort entries descending by date
+  entries.sort((a, b) => b.date.localeCompare(a.date));
+
+  // Compute daily totals
+  entries.forEach(e => {
+    e.dayTotalEarned = dailyMap[e.date]?.earned || 0;
+  });
+
+  const periodEarnedCoins = Object.values(dailyMap).reduce((s, d) => s + d.earned, 0);
+  const periodWithdrawnCoins = Object.values(dailyMap).reduce((s, d) => s + d.withdrawn, 0);
+
+  return {
+    entries,
+    dailyMap,
+    presentDaysCount,
+    periodEarnedCoins,
+    periodWithdrawnCoins
+  };
+}
+
+function renderDailyBarColumns(dailyMap, ym) {
+  const days = Object.values(dailyMap).sort((a, b) => a.dayNum - b.dayNum);
+  const maxCoins = Math.max(200, ...days.map(d => Math.max(d.earned, d.withdrawn)));
+
+  return days.map(d => {
+    const earnedHeight = Math.max(4, Math.round((d.earned / maxCoins) * 80));
+    const isToday = d.date === new Date().toISOString().split('T')[0];
+
+    return `
+      <div class="daily-bar-col group relative cursor-pointer" title="${d.date}: +${d.earned} AX, -${d.withdrawn} AX">
+        <div class="text-[9px] font-mono text-secondary group-hover:text-primary font-bold transition-colors">
+          ${d.earned > 0 ? d.earned : ''}
+        </div>
+        
+        <div class="w-full flex flex-col justify-end items-center gap-0.5">
+          ${d.withdrawn > 0 ? `
+            <div class="w-full bg-red-400/80 rounded-t-sm" style="height: ${Math.max(4, Math.round((d.withdrawn / maxCoins) * 80))}px;"></div>
+          ` : ''}
+          <div class="daily-bar-fill ${d.earned > 0 ? (d.earned > 140 ? 'bg-amber-400' : 'bg-emerald-500') : 'bg-divider'}" 
+            style="height: ${d.earned > 0 ? earnedHeight : 4}px;"></div>
+        </div>
+
+        <div class="text-[9px] font-mono ${isToday ? 'text-violet font-bold underline' : 'text-secondary'}">
+          ${d.dayNum}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function formatDateWithDay(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', weekday: 'short' });
+  } catch(e) {
+    return dateStr;
+  }
+}
+
+function formatMonthName(ym) {
+  if (!ym) return '';
+  try {
+    const [year, month] = ym.split('-');
+    const d = new Date(year, month - 1, 1);
+    return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  } catch(e) {
+    return ym;
+  }
+}
+
+async function openDailyCoinHistoryModal(uid, yearMonth) {
+  const u = ALL_USERS.find(x => x.id === uid);
+  if (!u) { showToast('User not found', 'error'); return; }
+
+  const ym = yearMonth || currentYM();
+  const modal = openModal('dailyCoinHistoryModal');
+
+  modal.innerHTML = `
+  <div class="modal max-w-3xl">
+    <div class="flex items-start justify-between mb-4 border-b border-divider pb-3">
+      <div class="flex items-center gap-3">
+        ${avatar(u.name || '?')}
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-lg font-bold text-primary">${u.name || 'Unnamed User'} — Daily Coin History</h2>
+            <code class="text-violet font-mono text-xs bg-soft-surface px-2 py-0.5 rounded-lg border border-divider">#${u.uniqueId || '—'}</code>
+          </div>
+          <p class="text-secondary text-xs">Day-by-day collection breakdown, attendance coins, overtime, rewards &amp; withdrawals.</p>
+        </div>
+      </div>
+      <button onclick="closeModal('dailyCoinHistoryModal')" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+    </div>
+
+    <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+      <div class="flex items-center gap-2">
+        <label class="text-xs text-secondary font-semibold">Month:</label>
+        <input type="month" id="modalHistoryYM" class="input-field py-1 px-2.5 text-xs" value="${ym}" onchange="openDailyCoinHistoryModal('${uid}', this.value)">
+      </div>
+      <button onclick="exportUserDailyHistoryCSV('${uid}', '${ym}')" class="btn-outline py-1.5 px-3 text-xs flex items-center gap-1">
+        <span>📥</span> Export CSV
+      </button>
+    </div>
+
+    <div id="modalDailyHistoryBody">
+      <div class="flex justify-center py-12"><div class="spinner"></div></div>
+    </div>
+  </div>`;
+
+  try {
+    const records = await loadAttendance(uid, ym);
+    const ledger = await compileUserDailyLedger(u, ym, records);
+
+    document.getElementById('modalDailyHistoryBody').innerHTML = `
+      <div class="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+        <!-- Visual Day Chart -->
+        <div class="p-3.5 rounded-2xl bg-soft-surface border border-divider">
+          <div class="text-xs font-bold text-primary mb-2 flex justify-between">
+            <span>Daily Coin Earnings (${formatMonthName(ym)})</span>
+            <span class="text-emerald-500 font-mono">+${ledger.periodEarnedCoins.toLocaleString()} AX total</span>
+          </div>
+          <div class="h-24 flex items-end gap-1 overflow-x-auto pt-3 pb-1">
+            ${renderDailyBarColumns(ledger.dailyMap, ym)}
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="rounded-xl border border-divider overflow-hidden">
+          <table class="w-full text-left">
+            <thead class="bg-soft-surface text-secondary text-xs">
+              <tr>
+                <th class="p-3">Date</th>
+                <th class="p-3">Source / Activity</th>
+                <th class="p-3">Coins (+/-)</th>
+                <th class="p-3">INR Value</th>
+                <th class="p-3">Anti-Fraud</th>
+              </tr>
+            </thead>
+            <tbody class="text-xs">
+              ${ledger.entries.length === 0 ? `
+                <tr><td colspan="5" class="p-6 text-center text-secondary">No records found for ${formatMonthName(ym)}.</td></tr>
+              ` : ledger.entries.map(e => `
+                <tr class="border-t border-divider hover:bg-soft-surface">
+                  <td class="p-3 font-mono font-bold">${formatDateWithDay(e.date)}</td>
+                  <td class="p-3">
+                    <div class="font-semibold text-primary">${e.icon} ${e.title}</div>
+                    <div class="text-[11px] text-secondary">${e.description}</div>
+                  </td>
+                  <td class="p-3 font-mono font-bold ${e.amount > 0 ? 'text-emerald-500' : 'text-red-400'}">
+                    ${e.amount > 0 ? '+' : ''}${e.amount.toLocaleString()} AX
+                  </td>
+                  <td class="p-3 font-mono text-secondary">₹${(Math.abs(e.amount) / 100).toFixed(2)}</td>
+                  <td class="p-3">
+                    ${e.isSuspicious ? `<span class="badge-threat-high text-[10px]">🚨 Spike</span>` : `<span class="badge-threat-safe text-[10px]">✓ Clean</span>`}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    document.getElementById('modalDailyHistoryBody').innerHTML = fbErrorBanner(e);
+  }
+}
+
+async function exportUserDailyHistoryCSV(uid, ym) {
+  const u = ALL_USERS.find(x => x.id === uid);
+  if (!u) return;
+
+  const records = await loadAttendance(uid, ym);
+  const ledger = await compileUserDailyLedger(u, ym, records);
+
+  const rows = ledger.entries.map(e => [
+    `"${e.date}"`,
+    `"${u.name || ''}"`,
+    `"${u.uniqueId || ''}"`,
+    `"${e.title}"`,
+    `"${e.description.replace(/"/g, '""')}"`,
+    e.amount,
+    (e.amount / 100).toFixed(2),
+    e.dayTotalEarned,
+    e.isSuspicious ? 'FLAGGED_SPIKE' : 'VALID'
+  ]);
+
+  const csv = [
+    ['Date','UserName','UniqueId','Activity','Description','CoinsAX','INRValue','DayTotalEarnedAX','FraudStatus'],
+    ...rows
+  ].map(r => r.join(',')).join('\n');
+
+  downloadCSV(csv, `${(u.name || 'user').replace(/\s+/g, '_')}_daily_coin_history_${ym}.csv`);
+  showToast(`Daily history exported for ${u.name || uid}!`);
+}
+
 
 function fraudScannerTableRows(users) {
   if (!users.length) {
@@ -2218,6 +2776,9 @@ function fraudScannerTableRows(users) {
       </td>
       <td class="p-4" onclick="event.stopPropagation()">
         <div class="flex items-center gap-1.5 flex-wrap">
+          <button onclick="openDailyCoinHistoryModal('${safeUid}')" class="btn-outline py-1 px-2.5 text-xs text-violet font-medium border-violet/30 hover:bg-violet/10" title="View Day-by-Day Coin Collection Ledger">
+            📅 History
+          </button>
           <button onclick="openFraudAuditModal('${safeUid}')" class="btn-outline py-1 px-2.5 text-xs" title="Open Deep Audit Dossier">
             🔍 Audit
           </button>
@@ -2404,10 +2965,15 @@ async function openFraudAuditModal(uid) {
 
         <!-- Action Controls -->
         <div class="space-y-2 pt-1">
-          ${audit.discrepancy > 500 ? `
-          <button onclick="autoFixUserCoins('${u.id}', ${audit.estimatedLegitCoins})" class="btn-primary w-full py-2.5 text-xs font-semibold shadow-md flex items-center justify-center gap-2">
-            <span>⚡</span> Auto-Fix &amp; Reset Balance to Legit (~${audit.estimatedLegitCoins.toLocaleString()} AX)
-          </button>` : ''}
+          <div class="flex gap-2">
+            <button onclick="closeModal('fraudAuditModal');openDailyCoinHistoryModal('${u.id}')" class="btn-outline flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 text-violet border-violet/30 hover:bg-violet/10">
+              <span>📅</span> View Day-by-Day Coin History
+            </button>
+            ${audit.discrepancy > 500 ? `
+            <button onclick="autoFixUserCoins('${u.id}', ${audit.estimatedLegitCoins})" class="btn-primary flex-1 py-2.5 text-xs font-semibold shadow-md flex items-center justify-center gap-1.5">
+              <span>⚡</span> Auto-Fix to ~${audit.estimatedLegitCoins.toLocaleString()} AX
+            </button>` : ''}
+          </div>
 
           <div class="flex gap-2">
             <button onclick="closeModal('fraudAuditModal');openEditUserModal('${u.id}')" class="btn-outline flex-1 py-2 text-xs">

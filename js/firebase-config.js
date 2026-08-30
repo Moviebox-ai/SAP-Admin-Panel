@@ -17,6 +17,17 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
+// ── Strict Session Persistence: Auto logout when browser/tab is closed ──
+// SESSION persistence keeps user logged in during the active browser window/tab,
+// but automatically clears credentials when the window or browser is closed.
+try {
+  auth.setPersistence(firebase.auth.Auth.Persistence.SESSION).catch((err) => {
+    console.warn('Auth session persistence setup:', err);
+  });
+} catch(e) {
+  console.warn('Set persistence error:', e);
+}
+
 // ── Admin emails — must match Firestore security rules isAdmin() ──
 const ADMIN_EMAILS = [
   'yogeshkumar53076@gmail.com',
@@ -67,6 +78,18 @@ try {
 auth.onAuthStateChanged(async (user) => {
   updateFirebaseStatusUI('connected', 'Firebase Connected & Ready');
   if (user) {
+    // Verify that session is active in this browser tab/window
+    const sessionActive = sessionStorage.getItem('admin_session_active');
+    if (!sessionActive) {
+      // Browser or tab was closed previously; require fresh login
+      currentAdmin = null;
+      IS_ADMIN     = false;
+      try {
+        await auth.signOut();
+      } catch(e) {}
+      showScreen('login');
+      return;
+    }
     currentAdmin = user;
     updateHeaderUI(user);
     await verifyAdminAccess(user);
@@ -74,6 +97,9 @@ auth.onAuthStateChanged(async (user) => {
     if (!isDemoMode) {
       currentAdmin = null;
       IS_ADMIN     = false;
+      try {
+        sessionStorage.removeItem('admin_session_active');
+      } catch(e) {}
       showScreen('login');
     }
   }

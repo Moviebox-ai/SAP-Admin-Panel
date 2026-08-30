@@ -59,20 +59,8 @@
         </div>
 
         <div class="mb-4">
-          <div class="flex items-center justify-between mb-2">
-            <label class="block text-xs font-semibold text-secondary uppercase tracking-wider">Admin Email</label>
-            <span class="text-xs text-secondary">Authorized IDs:</span>
-          </div>
-          <!-- Quick selector chips for authorized admin emails -->
-          <div class="flex flex-wrap gap-1.5 mb-2.5">
-            <button type="button" onclick="quickFillEmail('yogeshkumar53076@gmail.com')" class="text-xs bg-soft-surface hover:bg-violet hover:text-white text-violet px-2.5 py-1 rounded-lg transition-colors font-medium border border-divider">
-              yogeshkumar53076@gmail.com
-            </button>
-            <button type="button" onclick="quickFillEmail('rohankumar53076@gmail.com')" class="text-xs bg-soft-surface hover:bg-violet hover:text-white text-violet px-2.5 py-1 rounded-lg transition-colors font-medium border border-divider">
-              rohankumar53076@gmail.com
-            </button>
-          </div>
-          <input id="loginEmail" type="email" class="input-field text-sm" placeholder="admin@example.com" value="yogeshkumar53076@gmail.com" />
+          <label class="block text-xs font-semibold text-secondary uppercase tracking-wider mb-2">Admin Email</label>
+          <input id="loginEmail" type="email" class="input-field text-sm" placeholder="admin@example.com" autocomplete="email" required />
         </div>
 
         <!-- Password Field (Hidden in Reset mode) -->
