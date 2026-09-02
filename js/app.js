@@ -3092,9 +3092,11 @@ async function toggleBanUser(uid) {
         });
       } catch(e){}
 
-      showToast(`✓ User ${name} has been UNBANNED successfully!`);
+      showToast(`User ${name} has been UNBANNED successfully!`, 'success');
       closeModal('userModal');
       closeModal('fraudAuditModal');
+
+      showUnbanSuccessModal(u, name);
 
       if (currentPage === 'fraud') _navigateInternal('fraud');
       else if (currentPage === 'users') filterUsers();
@@ -3141,6 +3143,64 @@ async function toggleBanUser(uid) {
       showToast('Error banning user: ' + e.message, 'error');
     }
   }
+}
+
+function showUnbanSuccessModal(u, name) {
+  const modal = openModal('unbanSuccessModal');
+  const safeUid = String(u?.id || '').replace(/'/g, "\\'");
+  const safeName = String(name || u?.name || 'User').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const email = String(u?.email || u?.id || '—').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const uniqueId = u?.uniqueId ? '#' + u.uniqueId : '—';
+  const coins = userCoinBalance(u) != null ? Number(userCoinBalance(u)).toLocaleString() : '0';
+
+  modal.innerHTML = `
+  <div class="modal max-w-md text-center p-6 sm:p-7">
+    <div class="w-14 h-14 rounded-2xl bg-emerald-500/10 border-2 border-emerald-500/30 text-emerald-500 flex items-center justify-center mx-auto mb-4 text-2xl shadow-sm">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+    </div>
+
+    <h3 class="text-lg sm:text-xl font-bold text-primary mb-1">User Successfully Unbanned</h3>
+    <p class="text-xs text-secondary mb-4">Account access, attendance tracking, and rewards are now fully restored.</p>
+    
+    <div class="card p-4 bg-soft-surface text-left mb-5 space-y-3 border border-divider">
+      <div class="flex items-center gap-3 pb-3 border-b border-divider">
+        ${avatar(name || u?.name || '?')}
+        <div class="min-w-0 flex-1">
+          <div class="font-bold text-primary text-sm truncate">${safeName}</div>
+          <div class="text-secondary text-xs truncate">${email}</div>
+        </div>
+        <span class="badge badge-present text-xs font-mono font-bold">${uniqueId}</span>
+      </div>
+      
+      <div class="space-y-2 text-xs text-secondary">
+        <div class="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-medium">
+          <span class="text-sm">✓</span> <span>Removed from <strong>bannedUsers</strong> collection</span>
+        </div>
+        <div class="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-medium">
+          <span class="text-sm">✓</span> <span>App sign-in &amp; daily attendance check-in unlocked</span>
+        </div>
+        <div class="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-medium">
+          <span class="text-sm">✓</span> <span>Coin balance active (🪙 ${coins} Coins)</span>
+        </div>
+        <div class="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-medium">
+          <span class="text-sm">✓</span> <span>Action recorded in <strong>adminAuditLog</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex gap-2.5">
+      ${u?.id ? `
+      <button onclick="closeModal('unbanSuccessModal');showUserDetail('${safeUid}')" class="btn-outline flex-1 py-2.5 text-xs font-semibold">
+        View Profile
+      </button>` : ''}
+      <button onclick="closeModal('unbanSuccessModal')" class="btn-primary flex-1 py-2.5 text-xs font-bold shadow-violet">
+        Done
+      </button>
+    </div>
+  </div>`;
 }
 
 // User detail modal
@@ -4018,9 +4078,10 @@ function closeModal(id) {
 // ═══════════════════════════════════════════════════════════════
 function showToast(msg, type = 'success') {
   const el = document.createElement('div');
-  const bg = type === 'error' ? '#E53935' : '#7C3AED';
-  el.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999;background:${bg};color:white;padding:12px 20px;border-radius:14px;font-family:Inter,sans-serif;font-size:14px;font-weight:500;display:flex;align-items:center;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,.2);max-width:380px;word-break:break-word;animation:fadeIn .3s ease;`;
-  el.textContent = (type === 'success' ? '✓ ' : '✕ ') + msg;
+  const bg = type === 'error' ? '#DC2626' : (type === 'success' ? '#059669' : '#7C3AED');
+  el.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999;background:${bg};color:white;padding:12px 20px;border-radius:14px;font-family:Inter,sans-serif;font-size:14px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);max-width:380px;word-break:break-word;animation:fadeIn .3s ease;`;
+  const prefix = (msg.startsWith('✓') || msg.startsWith('✕') || msg.startsWith('🚫') || msg.startsWith('🔔')) ? '' : (type === 'success' ? '✓ ' : '✕ ');
+  el.textContent = prefix + msg;
   document.body.appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 4000);
 }
