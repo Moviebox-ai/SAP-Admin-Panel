@@ -1566,6 +1566,9 @@ function requestNotificationPermission() {
 }
 
 function getUserQuickFraudBadge(u) {
+  if (isUserBanned(u.id)) {
+    return `<span class="badge badge-absent text-xs font-bold animate-pulse bg-red-600 text-white">🚫 BANNED</span>`;
+  }
   const coins = userCoinBalance(u) ?? 0;
   const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && x.uniqueId === u.uniqueId).length : 0;
   
@@ -1593,6 +1596,7 @@ function buildUsers() {
       </select>
       <select id="riskFilter" onchange="filterUsers()" class="py-2.5">
         <option value="">All Security Status</option>
+        <option value="banned">🚫 Banned / Frozen Accounts</option>
         <option value="safe">🟢 Verified Safe</option>
         <option value="suspicious">🟡 Suspicious Balance</option>
         <option value="highrisk">🔴 High Risk / Anomaly</option>
@@ -1619,13 +1623,18 @@ function buildUsers() {
 
 function usersTableRows(users) {
   if (!users.length) return `<tr><td colspan="7">${emptyState('No users found')}</td></tr>`;
-  return users.map(u => `
-  <tr onclick="showUserDetail('${u.id}')" class="cursor-pointer hover:bg-soft-surface transition-colors">
+  return users.map(u => {
+    const isBanned = isUserBanned(u.id);
+    return `
+  <tr onclick="showUserDetail('${u.id}')" class="cursor-pointer hover:bg-soft-surface transition-colors ${isBanned ? 'bg-red-500/5' : ''}">
     <td>
       <div class="flex items-center gap-3">
         ${avatar(u.name || '?')}
         <div>
-          <div class="font-semibold text-primary text-sm">${u.name || '<span class="text-secondary italic">No name</span>'}</div>
+          <div class="font-semibold text-primary text-sm flex items-center gap-1.5">
+            ${u.name || '<span class="text-secondary italic">No name</span>'}
+            ${isBanned ? '<span class="text-[9px] bg-red-600 text-white font-bold px-1 py-0.5 rounded leading-none">BANNED</span>' : ''}
+          </div>
           <div class="text-secondary text-xs">${u.email || ''}</div>
         </div>
       </div>
@@ -1636,13 +1645,17 @@ function usersTableRows(users) {
     <td>${userCoinBalance(u) != null ? `<span class="coin-badge">🪙 ${(userCoinBalance(u) || 0).toLocaleString()}</span>` : '—'}</td>
     <td>${getUserQuickFraudBadge(u)}</td>
     <td onclick="event.stopPropagation()">
-      <div class="flex gap-2">
-        <button onclick="showUserDetail('${u.id}')" class="btn-outline py-1 px-3 text-xs">View</button>
-        <button onclick="openEditUserModal('${u.id}')" class="btn-primary py-1 px-3 text-xs">Edit</button>
-        <button onclick="confirmDeleteUser('${u.id}','${(u.name||'').replace(/'/g,"\\'")}')" class="btn-danger py-1 px-3 text-xs">Delete</button>
+      <div class="flex gap-1.5 flex-wrap">
+        <button onclick="showUserDetail('${u.id}')" class="btn-outline py-1 px-2.5 text-xs">View</button>
+        <button onclick="openEditUserModal('${u.id}')" class="btn-primary py-1 px-2.5 text-xs">Edit</button>
+        <button onclick="toggleBanUser('${u.id}')" class="${isBanned ? 'btn-primary bg-green-600 hover:bg-green-700' : 'btn-danger'} py-1 px-2.5 text-xs font-semibold" title="${isBanned ? 'Unban User' : 'Ban User'}">
+          ${isBanned ? 'Unban' : 'Ban'}
+        </button>
+        <button onclick="confirmDeleteUser('${u.id}','${(u.name||'').replace(/'/g,"\\'")}')" class="btn-ghost text-red-400 hover:text-red-500 py-1 px-2 text-xs" title="Delete Account">🗑️</button>
       </div>
     </td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
 }
 
 function filterUsers() {
@@ -1663,12 +1676,14 @@ function filterUsers() {
     if (sf === 'none') matchS = !u.monthlySalary || u.monthlySalary === 0;
 
     let matchR = true;
+    const isBanned = isUserBanned(u.id);
     const coins = userCoinBalance(u) ?? 0;
     const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && x.uniqueId === u.uniqueId).length : 0;
     
-    if (rf === 'highrisk') matchR = coins < 0 || dupes > 0 || coins > 25000;
-    if (rf === 'suspicious') matchR = coins > 5000 && coins <= 25000 && dupes === 0;
-    if (rf === 'safe') matchR = coins >= 0 && coins <= 5000 && dupes === 0;
+    if (rf === 'banned') matchR = isBanned;
+    if (rf === 'highrisk') matchR = !isBanned && (coins < 0 || dupes > 0 || coins > 25000);
+    if (rf === 'suspicious') matchR = !isBanned && (coins > 5000 && coins <= 25000 && dupes === 0);
+    if (rf === 'safe') matchR = !isBanned && (coins >= 0 && coins <= 5000 && dupes === 0);
 
     return matchQ && matchS && matchR;
   });
@@ -1879,9 +1894,10 @@ async function buildFraudPage() {
     };
   });
 
-  const highRiskCount = quickScanned.filter(x => x.riskLevel === 'HIGH_RISK').length;
-  const warningCount  = quickScanned.filter(x => x.riskLevel === 'WARNING').length;
-  const safeCount     = quickScanned.filter(x => x.riskLevel === 'SAFE').length;
+  const bannedCount   = ALL_USERS.filter(u => isUserBanned(u.id)).length;
+  const highRiskCount = quickScanned.filter(x => !isUserBanned(x.user.id) && x.riskLevel === 'HIGH_RISK').length;
+  const warningCount  = quickScanned.filter(x => !isUserBanned(x.user.id) && x.riskLevel === 'WARNING').length;
+  const safeCount     = quickScanned.filter(x => !isUserBanned(x.user.id) && x.riskLevel === 'SAFE').length;
 
   return `
   <div class="space-y-6">
@@ -2067,7 +2083,8 @@ async function buildFraudPage() {
               class="input-field max-w-sm py-2 text-xs" oninput="filterFraudUsers()" />
             
             <select id="fraudRiskFilter" onchange="filterFraudUsers()" class="py-2 text-xs">
-              <option value="all">All Risk Levels (${ALL_USERS.length})</option>
+              <option value="all">All Status (${ALL_USERS.length})</option>
+              <option value="banned">🚫 Banned / Frozen Accounts (${bannedCount})</option>
               <option value="highrisk">🔴 High Risk / Hacks Only (${highRiskCount})</option>
               <option value="warning">🟡 Suspicious Discrepancies (${warningCount})</option>
               <option value="safe">🟢 100% Verified Clean (${safeCount})</option>
@@ -2654,9 +2671,14 @@ function fraudScannerTableRows(users) {
     const estLegit = rewards + 100;
     const discrepancy = coins - estLegit;
 
+    const banned = isUserBanned(u.id);
     let riskBadge = '';
     let hackReason = '';
-    if (coins < 0) {
+    if (banned) {
+      riskBadge = `<span class="badge badge-absent text-xs font-bold animate-pulse bg-red-600 text-white">🚫 BANNED ACCOUNT</span>`;
+      const banReason = BANNED_USERS_MAP[u.id]?.reason || 'Flagged & Frozen by Administrator';
+      hackReason = `Account locked: ${banReason}`;
+    } else if (coins < 0) {
       riskBadge = `<span class="badge-threat-high">🔴 Negative Balance</span>`;
       hackReason = 'Race condition or corrupted negative balance';
     } else if (dupes > 0) {
@@ -2679,12 +2701,15 @@ function fraudScannerTableRows(users) {
     const safeUid = String(u.id).replace(/'/g, "\\'");
 
     return `
-    <tr class="border-t border-divider hover:bg-soft-surface transition-colors cursor-pointer" onclick="openFraudAuditModal('${safeUid}')">
+    <tr class="border-t border-divider hover:bg-soft-surface transition-colors cursor-pointer ${banned ? 'bg-red-500/5' : ''}" onclick="openFraudAuditModal('${safeUid}')">
       <td class="p-4">
         <div class="flex items-center gap-3">
           ${avatar(u.name || '?')}
           <div>
-            <div class="font-semibold text-primary text-sm">${u.name || '<span class="text-secondary italic">Unnamed User</span>'}</div>
+            <div class="font-semibold text-primary text-sm flex items-center gap-2">
+              ${u.name || '<span class="text-secondary italic">Unnamed User</span>'}
+              ${banned ? '<span class="text-[10px] bg-red-600 text-white font-bold px-1.5 py-0.5 rounded">BANNED</span>' : ''}
+            </div>
             <div class="text-secondary text-xs truncate max-w-[180px]">${u.email || u.id}</div>
           </div>
         </div>
@@ -2716,12 +2741,12 @@ function fraudScannerTableRows(users) {
           <button onclick="openFraudAuditModal('${safeUid}')" class="btn-outline py-1 px-2.5 text-xs" title="Open Deep Audit Dossier">
             🔍 Audit
           </button>
-          ${discrepancy > 500 ? `
+          ${discrepancy > 500 && !banned ? `
           <button onclick="autoFixUserCoins('${safeUid}', ${estLegit})" class="btn-primary py-1 px-2.5 text-xs shadow-sm" title="Recalculate & Reset Balance to Legit">
             ⚡ Fix
           </button>` : ''}
-          <button onclick="toggleBanUser('${safeUid}')" class="btn-danger py-1 px-2 text-xs" title="Freeze or Ban Account">
-            🚫
+          <button onclick="toggleBanUser('${safeUid}')" class="${banned ? 'btn-primary bg-green-600 hover:bg-green-700' : 'btn-danger'} py-1 px-2.5 text-xs font-semibold" title="${banned ? 'Unban & Restore Account' : 'Freeze or Ban Account'}">
+            ${banned ? '✓ Unban' : '🚫 Ban'}
           </button>
         </div>
       </td>
@@ -2741,15 +2766,17 @@ function filterFraudUsers() {
       (u.uniqueId || '').includes(q) ||
       (u.email    || '').toLowerCase().includes(q);
 
+    const isBanned = isUserBanned(u.id);
     const coins = userCoinBalance(u) ?? 0;
     const dupes = u.uniqueId ? ALL_USERS.filter(x => x.id !== u.id && String(x.uniqueId) === String(u.uniqueId)).length : 0;
     const rewards = Number(u.rewards?.totalCoinsEarned || 0);
     const estLegit = rewards + 100;
-    const isHigh = coins < 0 || dupes > 0 || (coins > 10000 && estLegit < 500) || coins > 25000;
-    const isWarn = !isHigh && (coins > 3000 || dupes > 0);
-    const isSafe = !isHigh && !isWarn;
+    const isHigh = !isBanned && (coins < 0 || dupes > 0 || (coins > 10000 && estLegit < 500) || coins > 25000);
+    const isWarn = !isBanned && !isHigh && (coins > 3000 || dupes > 0);
+    const isSafe = !isBanned && !isHigh && !isWarn;
 
     let matchR = true;
+    if (risk === 'banned')   matchR = isBanned;
     if (risk === 'highrisk') matchR = isHigh;
     if (risk === 'warning')  matchR = isWarn;
     if (risk === 'safe')     matchR = isSafe;
@@ -2913,8 +2940,8 @@ async function openFraudAuditModal(uid) {
             <button onclick="closeModal('fraudAuditModal');openEditUserModal('${u.id}')" class="btn-outline flex-1 py-2 text-xs">
               ✏️ Adjust Manually
             </button>
-            <button onclick="toggleBanUser('${u.id}')" class="btn-danger flex-1 py-2 text-xs">
-              🚫 Freeze / Ban Account
+            <button onclick="toggleBanUser('${u.id}')" class="${isUserBanned(u.id) ? 'btn-primary bg-green-600 hover:bg-green-700' : 'btn-danger'} flex-1 py-2 text-xs font-semibold">
+              ${isUserBanned(u.id) ? '✓ Unban Account' : '🚫 Freeze / Ban Account'}
             </button>
             <button onclick="closeModal('fraudAuditModal')" class="btn-ghost py-2 px-4 text-xs">
               Close
@@ -3035,29 +3062,84 @@ function exportFraudAuditCSV() {
   showToast('Security audit CSV exported successfully!');
 }
 
+function isUserBanned(uid) {
+  return !!BANNED_USERS_MAP[uid];
+}
+
 async function toggleBanUser(uid) {
   const u = ALL_USERS.find(x => x.id === uid);
   const name = u?.name || uid;
-  const reason = prompt(`Reason for Banning / Freezing account ${name}?`, 'Suspicious Coin Activity / Fraud Prevention');
-  if (!reason) return;
+  const currentlyBanned = isUserBanned(uid);
 
-  try {
-    await db.collection('bannedUsers').doc(uid).set({
-      uid: uid,
-      name: name,
-      uniqueId: u?.uniqueId || '—',
-      email: u?.email || '—',
-      reason: reason,
-      bannedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      bannedBy: currentAdmin?.email || 'admin'
-    });
-    showToast(`User ${name} has been BANNED & Flagged!`, 'error');
-    closeModal('userModal');
-    closeModal('fraudAuditModal');
-    if (currentPage === 'fraud') _navigateInternal('fraud');
-    else if (currentPage === 'users') _navigateInternal('users');
-  } catch(e) {
-    showToast('Error banning user: ' + e.message, 'error');
+  if (currentlyBanned) {
+    const banInfo = BANNED_USERS_MAP[uid];
+    const confirmUnban = confirm(`User "${name}" is currently BANNED.\n\nReason: ${banInfo?.reason || 'Flagged by admin'}\n\nDo you want to UNBAN this user and restore their access?`);
+    if (!confirmUnban) return;
+
+    try {
+      await db.collection('bannedUsers').doc(uid).delete();
+      delete BANNED_USERS_MAP[uid];
+
+      // Also log audit entry
+      try {
+        await db.collection('adminAuditLog').add({
+          adminUid: currentAdmin?.uid || currentAdmin?.email || 'admin',
+          action: `UNBAN_USER`,
+          targetUserId: uid,
+          details: `Unbanned user ${name} (${u?.email || uid})`,
+          deviceInfo: navigator.userAgent.substring(0, 100),
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch(e){}
+
+      showToast(`✓ User ${name} has been UNBANNED successfully!`);
+      closeModal('userModal');
+      closeModal('fraudAuditModal');
+
+      if (currentPage === 'fraud') _navigateInternal('fraud');
+      else if (currentPage === 'users') filterUsers();
+    } catch(e) {
+      showToast('Error unbanning user: ' + e.message, 'error');
+    }
+  } else {
+    const reason = prompt(`Reason for Banning / Freezing account ${name}?`, 'Suspicious Coin Activity / Fraud Prevention');
+    if (!reason) return;
+
+    try {
+      const banData = {
+        uid: uid,
+        name: name,
+        uniqueId: u?.uniqueId || '—',
+        email: u?.email || '—',
+        reason: reason,
+        bannedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        bannedBy: currentAdmin?.email || 'admin'
+      };
+
+      await db.collection('bannedUsers').doc(uid).set(banData);
+      BANNED_USERS_MAP[uid] = banData;
+
+      // Also log audit entry
+      try {
+        await db.collection('adminAuditLog').add({
+          adminUid: currentAdmin?.uid || currentAdmin?.email || 'admin',
+          action: `BAN_USER`,
+          targetUserId: uid,
+          details: `Banned user ${name} (${u?.email || uid}) - Reason: ${reason}`,
+          deviceInfo: navigator.userAgent.substring(0, 100),
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch(e){}
+
+      showToast(`User ${name} has been BANNED & Flagged!`, 'error');
+      closeModal('userModal');
+      closeModal('fraudAuditModal');
+
+      if (currentPage === 'fraud') _navigateInternal('fraud');
+      else if (currentPage === 'users') filterUsers();
+    } catch(e) {
+      showToast('Error banning user: ' + e.message, 'error');
+    }
   }
 }
 
@@ -3090,7 +3172,25 @@ async function showUserDetail(uid) {
     const attBlocked = ATTENDANCE_PERMISSION_DENIED;
     const audit   = await computeUserFraudAudit(u, records);
 
+    const isBanned = isUserBanned(uid);
+    const banInfo  = BANNED_USERS_MAP[uid];
+
     document.getElementById('userDetailBody').innerHTML = `
+      ${isBanned ? `
+      <div class="bg-red-500/10 border-2 border-red-500/40 rounded-2xl p-4 mb-4 flex items-center justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xl">🚫</span>
+            <h4 class="font-bold text-red-400 text-sm">Account is Currently BANNED / FROZEN</h4>
+          </div>
+          <p class="text-xs text-secondary mt-1">Reason: <strong class="text-primary">${banInfo?.reason || 'Flagged by Admin'}</strong></p>
+          <p class="text-[11px] text-secondary">Banned by: ${banInfo?.bannedBy || 'admin'}</p>
+        </div>
+        <button onclick="toggleBanUser('${u.id}')" class="btn-primary bg-green-600 hover:bg-green-700 py-2 px-4 text-xs font-bold shadow-sm whitespace-nowrap">
+          ✓ Unban User
+        </button>
+      </div>` : ''}
+
       <!-- Profile fields -->
       <div class="grid grid-cols-2 gap-2 mb-4">
         ${miniStat('Unique ID',      '#' + (u.uniqueId || '—'), 'text-violet font-mono')}
@@ -3174,7 +3274,9 @@ async function showUserDetail(uid) {
 
       <div class="flex flex-wrap gap-2 pt-2">
         <button onclick="closeModal('userModal');openEditUserModal('${u.id}')" class="btn-primary flex-1 py-2 text-xs">Edit Profile / Coins</button>
-        <button onclick="toggleBanUser('${u.id}')" class="btn-danger flex-1 py-2 text-xs">🚫 Freeze / Ban User</button>
+        <button onclick="toggleBanUser('${u.id}')" class="${isBanned ? 'btn-primary bg-green-600 hover:bg-green-700' : 'btn-danger'} flex-1 py-2 text-xs font-semibold">
+          ${isBanned ? '✓ Unban User' : '🚫 Freeze / Ban User'}
+        </button>
         <button onclick="closeModal('userModal')" class="btn-ghost py-2 px-3 text-xs">Close</button>
       </div>`;
   } catch(e) {

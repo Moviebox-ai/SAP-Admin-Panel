@@ -38,6 +38,7 @@ const ADMIN_EMAILS = [
 let currentAdmin     = null;
 let IS_ADMIN         = false;
 let ALL_USERS        = [];
+let BANNED_USERS_MAP = {}; // uid -> banned record
 let ATTENDANCE_CACHE = {};
 let usersLoading     = false;
 let ALL_WITHDRAWALS  = [];
@@ -212,9 +213,23 @@ function updateHeaderUI(user) {
 }
 
 // ── Firestore reads ────────────────────────────────────────────
+async function loadBannedUsers() {
+  try {
+    const snap = await db.collection('bannedUsers').get();
+    const map = {};
+    snap.docs.forEach(doc => {
+      map[doc.id] = { id: doc.id, ...doc.data() };
+    });
+    BANNED_USERS_MAP = map;
+  } catch (e) {
+    console.warn('loadBannedUsers:', e);
+  }
+}
+
 async function loadAllUsers() {
   usersLoading = true;
   try {
+    await loadBannedUsers();
     const snap = await db.collection('users').orderBy('name').get();
     ALL_USERS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     const countEl = document.getElementById('navUserCount');
