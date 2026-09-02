@@ -345,6 +345,9 @@ function updateWithdrawalBadge() {
   countEl.textContent = pending;
 }
 
+// Track actual permission status from Firestore queries
+let ATTENDANCE_PERMISSION_DENIED = false;
+
 // Load one user's attendance for a given month (cached)
 async function loadAttendance(uid, yearMonth) {
   const key = `${uid}_${yearMonth}`;
@@ -357,9 +360,15 @@ async function loadAttendance(uid, yearMonth) {
       .get();
     const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     ATTENDANCE_CACHE[key] = records;
+    ATTENDANCE_PERMISSION_DENIED = false;
     return records;
   } catch (e) {
-    if (e.code !== 'permission-denied') console.error('loadAttendance:', uid, e);
+    if (e.code === 'permission-denied') {
+      ATTENDANCE_PERMISSION_DENIED = true;
+      console.warn('loadAttendance: Permission denied by Firestore security rules for user', uid);
+    } else {
+      console.error('loadAttendance:', uid, e);
+    }
     return [];
   }
 }
@@ -372,8 +381,12 @@ async function loadAllAttendance(uid) {
       .orderBy('date', 'desc').limit(200).get();
     const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     ATTENDANCE_CACHE[key] = records;
+    ATTENDANCE_PERMISSION_DENIED = false;
     return records;
   } catch (e) {
+    if (e.code === 'permission-denied') {
+      ATTENDANCE_PERMISSION_DENIED = true;
+    }
     console.error('loadAllAttendance:', e);
     return [];
   }

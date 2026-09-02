@@ -1,0 +1,683 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ══════════════════════════════════════════════════════════════
+    //  CORE AUTH HELPERS
+    // ══════════════════════════════════════════════════════════════
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function currentUid() {
+      return request.auth.uid;
+    }
+
+    // Email-based admin check — no Firestore read required.
+    function isAdmin() {
+      return isAuthenticated()
+          && request.auth.token.email in [
+               'rohankumar53076@gmail.com',
+               'yogeshkumar53076@gmail.com'
+             ];
+    }
+
+    function isNotBanned() {
+      return !exists(/databases/$(database)/documents/bannedUsers/$(currentUid()));
+    }
+
+    function isActiveUser() {
+      return isAuthenticated() && isNotBanned();
+    }
+
+    function isActiveOwner(uid) {
+      return isOwner(uid) && isNotBanned();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  FIELD VALIDATORS
+    // ══════════════════════════════════════════════════════════════
+
+    function hasField(field) {
+      return field in request.resource.data;
+    }
+
+    // Merged: original enum + the newer human-readable status strings
+    // the app is now writing, so nothing that currently works breaks.
+    // FIX: added 'HOLIDAY' (all-caps) — the app's Attendance model writes
+    // status = "HOLIDAY", but only the capitalized 'Holiday' was allowed,
+    // so marking a day as holiday was rejected by these rules.
+    function isValidStatus() {
+      return request.resource.data.status in [
+        'PRESENT', 'HALF', 'HALF_DAY', 'ABSENT', 'NONE', 'HOLIDAY',
+        'Present', 'Half Day', 'Absent', 'Overtime', 'Holiday'
+      ];
+    }
+
+    function isValidDateFormat(dateStr) {
+      return dateStr.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidHours(hours) {
+      return hours is number && hours >= 0 && hours <= 24;
+    }
+
+    function isValidSalary(salary) {
+      return salary is number && salary >= 0 && salary <= 10000000;
+    }
+
+    function isValidWorkingDays(days) {
+      return days is int && days >= 1 && days <= 31;
+    }
+
+    // Full profile write — all 6 fields required (profile create/update screens)
+    function isValidUserProfileWrite() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'name', 'monthlySalary', 'workingDays', 'standardHours', 'overtimeRate'])
+          && data.uid is string
+          && data.name is string
+          && data.name.size() >= 1
+          && data.name.size() <= 100
+          && isValidSalary(data.monthlySalary)
+          && isValidWorkingDays(data.workingDays)
+          && isValidHours(data.standardHours)
+          && data.overtimeRate is number
+          && data.overtimeRate >= 0;
+    }
+
+    // Minimal create — used only by UniqueIdGenerator right after
+    // registration/Google sign-in, before the user's profile document
+    // exists yet. Only {uid, uniqueId} is written at that point.
+    //
+    // FORMAT: uniqueId is "AX-XXXXXXX" (AX prefix, hyphen, 7 digits),
+    // e.g. "AX-4567789".
+    function isValidUniqueIdOnlyWrite() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['uid', 'uniqueId'])
+          && data.uniqueId is string
+          && data.uniqueId.matches('^AX-[0-9]{7}$');
+    }
+
+    // Partial merge write — for RewardRepository.saveRewards / saveStreak /
+    // savePremiumUnlocks / saveSpinMetadata, UniqueIdGenerator merging
+    // uniqueId onto the profile, and the newer axCoins/userId/lastUpdated
+    // fields the app now also writes.
+    function isValidUserMergeWrite() {
+      let data = request.resource.data;
+      return data.keys().hasAny(['uid', 'name', 'rewards', 'premiumUnlocks', 'leaderboard',
+                                  'monthlySalary', 'workingDays', 'standardHours', 'overtimeRate',
+                                  'email', 'uniqueId', 'axCoins', 'userId', 'lastUpdated'])
+          && (!('name' in data) || (data.name is string && data.name.size() >= 1 && data.name.size() <= 100))
+          && (!('monthlySalary' in data) || isValidSalary(data.monthlySalary))
+          && (!('workingDays' in data) || isValidWorkingDays(data.workingDays))
+          && (!('standardHours' in data) || isValidHours(data.standardHours))
+          && (!('overtimeRate' in data) || (data.overtimeRate is number && data.overtimeRate >= 0))
+          && (!('rewards' in data) || isValidRewardsMap(data.rewards))
+          && (!('leaderboard' in data) || isValidLeaderboardMap(data.leaderboard))
+          && (!('uniqueId' in data) || (data.uniqueId is string && data.uniqueId.matches('^AX-[0-9]{7}$')))
+          && (!('axCoins' in data) || (data.axCoins is int && data.axCoins >= 0 && data.axCoins <= 10000000))
+          && (!('userId' in data) || data.userId is string)
+          && (!('lastUpdated' in data) || (data.lastUpdated is timestamp || data.lastUpdated is number));
+    }
+
+    function isValidRewardsMap(rewards) {
+      return rewards is map
+          && (!('coinBalance' in rewards) || (rewards.coinBalance is int && rewards.coinBalance >= 0 && rewards.coinBalance <= 1000000))
+          && (!('totalCoinsEarned' in rewards) || (rewards.totalCoinsEarned is int && rewards.totalCoinsEarned >= 0))
+          && (!('dailySpinsUsed' in rewards) || (rewards.dailySpinsUsed is int && rewards.dailySpinsUsed >= 0 && rewards.dailySpinsUsed <= 10))
+          && (!('lastSpinDate' in rewards) || rewards.lastSpinDate is string)
+          && (!('lastSpinTimestampMs' in rewards) || rewards.lastSpinTimestampMs is int)
+          && (!('lastSpinIndex' in rewards) || (rewards.lastSpinIndex is int && rewards.lastSpinIndex >= 0));
+    }
+
+    function isValidLeaderboardMap(lb) {
+      return lb is map
+          && (!('currentStreak' in lb) || (lb.currentStreak is int && lb.currentStreak >= 0))
+          && (!('bestStreak' in lb) || (lb.bestStreak is int && lb.bestStreak >= 0));
+    }
+
+    // date-format check kept (harmless — dates are always plain strings),
+    // but workedHours/overtimeHours stay optional as before.
+    function isValidAttendance() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['date', 'status'])
+          && data.date is string
+          && isValidDateFormat(data.date)
+          && isValidStatus()
+          && (!hasField('workedHours')   || isValidHours(data.workedHours))
+          && (!hasField('overtimeHours') || isValidHours(data.overtimeHours));
+    }
+
+    function dateMatchesDocId(docId) {
+      return request.resource.data.date == docId;
+    }
+
+    // ── Coin / Wallet validators ──────────────────────────────────
+
+    function isValidTransactionType() {
+      return request.resource.data.type in [
+        'AD_REWARD', 'DAILY_LOGIN', 'STREAK_BONUS', 'FEATURE_UNLOCK',
+        'SUBSCRIPTION', 'REFERRAL', 'PRIZE_REDEMPTION', 'WITHDRAWAL',
+        'ADMIN_ADD', 'ADMIN_DEDUCT', 'ADMIN_RESET'
+      ];
+    }
+
+    // Widened vs. the original (10k) to match the app's larger coin
+    // economy (withdrawals etc.), but still bounded — not wide open.
+    function isValidCoinAmount() {
+      let amt = request.resource.data.amount;
+      return amt is int && amt >= -100000 && amt <= 100000;
+    }
+
+    function isValidTransaction() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['type', 'amount', 'description'])
+          && isValidTransactionType()
+          && isValidCoinAmount()
+          && data.description is string
+          && data.description.size() <= 500;
+    }
+
+    function isUserTransactionType() {
+      return request.resource.data.type in [
+        'AD_REWARD', 'DAILY_LOGIN', 'STREAK_BONUS', 'FEATURE_UNLOCK',
+        'SUBSCRIPTION', 'REFERRAL', 'PRIZE_REDEMPTION', 'WITHDRAWAL'
+      ];
+    }
+
+    function isValidBalanceUpdate() {
+      let newBal  = request.resource.data.balance;
+      let prevBal = ('balance' in resource.data) ? resource.data.balance : 0;
+      return newBal is int
+          && newBal >= 0
+          && newBal <= 10000000
+          && (newBal - prevBal) <= 100105;
+    }
+
+    function isValidWalletCreate() {
+      let data = request.resource.data;
+      return (!('balance' in data) || (data.balance is int && data.balance >= 0));
+    }
+
+    function isNotTooFrequent() {
+      return !('lastUpdated' in resource.data)
+          || request.time > resource.data.lastUpdated + duration.value(5, 's');
+    }
+
+    function isBalanceIncrease() {
+      let newBal  = request.resource.data.balance;
+      let prevBal = ('balance' in resource.data) ? resource.data.balance : 0;
+      return 'balance' in request.resource.data && newBal > prevBal;
+    }
+
+    function isValidFeatureKey(key) {
+      return key in ['pdf_export', 'analytics', 'backup', 'salary_slip', 'remove_ads', 'theme_unlock'];
+    }
+
+    // ── Referral validator ─────────────────────────────────────────
+
+    function isValidReferral() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['referrerId', 'createdAt'])
+          && data.referrerId is string
+          && data.createdAt is timestamp;
+    }
+
+    // ── Leaderboard / weekly-prize entry validators ────────────────
+    // lastUpdated no longer required (app doesn't always send it),
+    // but validated if present.
+
+    function isValidLeaderboardEntry() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'weeklyCoins'])
+          && data.uid is string
+          && data.weeklyCoins is int
+          && data.weeklyCoins >= 0
+          && data.weeklyCoins <= 10000000
+          && (!('lastUpdated' in data) || data.lastUpdated is timestamp);
+    }
+
+    function isValidLeaderboardUpdate() {
+      let newCoins  = request.resource.data.weeklyCoins;
+      let prevCoins = ('weeklyCoins' in resource.data) ? resource.data.weeklyCoins : 0;
+      return (newCoins - prevCoins) <= 100105;
+    }
+
+    // updatedAt no longer required — validated only if present.
+    function isValidNotificationToken() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['token'])
+          && data.token is string
+          && data.token.size() <= 512
+          && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidPrizeRedemption() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'prizeId', 'coinCost', 'status'])
+          && data.uid is string
+          && data.prizeId is string && data.prizeId.size() <= 100
+          && data.coinCost is int && data.coinCost >= 0 && data.coinCost <= 10000000
+          && data.status in ['completed', 'pending', 'cancelled'];
+    }
+
+    // ── Withdrawal validator (new feature) ──────────────────────────
+
+    function isValidWithdrawal() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'amount', 'status'])
+          && data.uid is string
+          && data.amount is int && data.amount > 0 && data.amount <= 10000000
+          && data.status in ['pending', 'completed', 'cancelled', 'rejected'];
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ADMIN SETTINGS
+    // ══════════════════════════════════════════════════════════════
+
+    match /adminSettings/{configDoc} {
+
+      allow read: if isActiveUser();
+
+      allow create, update: if isAdmin()
+          && configDoc == 'walletConfig'
+          && (!('dailyCoinLimit' in request.resource.data)
+              || (request.resource.data.dailyCoinLimit is int
+                  && request.resource.data.dailyCoinLimit >= 1
+                  && request.resource.data.dailyCoinLimit <= 100000))
+          && (!('adRewardAmount' in request.resource.data)
+              || (request.resource.data.adRewardAmount is int
+                  && request.resource.data.adRewardAmount >= 1
+                  && request.resource.data.adRewardAmount <= 5000))
+          && (!('dailyLoginBonus' in request.resource.data)
+              || (request.resource.data.dailyLoginBonus is int
+                  && request.resource.data.dailyLoginBonus >= 0
+                  && request.resource.data.dailyLoginBonus <= 1000))
+          && (!('maxBalance' in request.resource.data)
+              || (request.resource.data.maxBalance is int
+                  && request.resource.data.maxBalance >= 1000
+                  && request.resource.data.maxBalance <= 10000000))
+          && (!('isWalletEnabled' in request.resource.data)
+              || request.resource.data.isWalletEnabled is bool)
+          && (!('isAdRewardEnabled' in request.resource.data)
+              || request.resource.data.isAdRewardEnabled is bool);
+
+      allow create, update: if isAdmin() && configDoc == 'adminConfig';
+
+      allow delete: if false;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  BANNED USERS
+    // ══════════════════════════════════════════════════════════════
+
+    match /bannedUsers/{uid} {
+
+      allow read: if isAdmin() || isOwner(uid);
+
+      allow create, update: if isAdmin()
+          && request.resource.data.keys().hasAll(['bannedAt', 'reason', 'bannedBy'])
+          && request.resource.data.bannedAt is timestamp
+          && request.resource.data.reason is string
+          && request.resource.data.reason.size() <= 500
+          && request.resource.data.bannedBy is string;
+
+      allow delete: if isAdmin();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  USERS  (profile + sub-collections)
+    // ══════════════════════════════════════════════════════════════
+
+    match /users/{uid} {
+
+      allow read: if isActiveOwner(uid) || isAdmin();
+
+      // Admin panel can create/edit any user doc without triggering
+      // the owner-only field validators (it writes admin-only fields
+      // like `currency`/`coins` too). Regular clients still go through
+      // isActiveOwner(uid) + the field validators as before.
+      allow create: if isAdmin()
+          || (isActiveOwner(uid)
+              && (isValidUserProfileWrite() || isValidUniqueIdOnlyWrite() || isValidUserMergeWrite())
+              && request.resource.data.uid == uid);
+
+      allow update: if isAdmin()
+          || (isActiveOwner(uid)
+              && (isValidUserProfileWrite() || isValidUserMergeWrite())
+              && (!('uid' in request.resource.data) || request.resource.data.uid == uid));
+
+      allow delete: if isOwner(uid) || isAdmin();
+
+      match /wallet/{walletDoc} {
+
+        allow read: if isActiveUser() && (isOwner(uid) || isAdmin());
+
+        allow create: if isActiveUser()
+            && walletDoc == 'wallet'
+            && isValidWalletCreate();
+
+        allow update: if walletDoc == 'wallet'
+            && (
+                (isActiveOwner(uid)
+                  && (
+                      (isBalanceIncrease() && isNotTooFrequent() && isValidBalanceUpdate())
+                      || (!isBalanceIncrease()
+                          && (!('balance' in request.resource.data)
+                              || request.resource.data.balance >= 0))
+                  )
+                  && (!('currentStreak' in request.resource.data)
+                      || (request.resource.data.currentStreak is int
+                          && request.resource.data.currentStreak >= 0))
+                  && (!('longestStreak' in request.resource.data)
+                      || (request.resource.data.longestStreak is int
+                          && request.resource.data.longestStreak >= 0))
+                )
+                || isAdmin()
+            );
+
+        allow delete: if false;
+      }
+
+      match /coinTransactions/{txId} {
+
+        allow read: if isActiveOwner(uid) || isAdmin();
+
+        allow create: if isValidTransaction()
+            && (isAdmin() || (isActiveOwner(uid) && isUserTransactionType()));
+
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+
+      match /features/{featureKey} {
+
+        allow read: if isActiveOwner(uid) || isAdmin();
+
+        allow create, update: if (isActiveOwner(uid) || isAdmin())
+            && isValidFeatureKey(featureKey)
+            && request.resource.data.keys().hasAll(['unlockedAt', 'expiresAt', 'cost'])
+            && request.resource.data.unlockedAt is timestamp
+            && request.resource.data.expiresAt  is timestamp
+            && request.resource.data.cost is int
+            && request.resource.data.cost >= 0;
+
+        allow delete: if isAdmin();
+      }
+
+      match /notifications/{docId} {
+
+        allow read:           if isActiveOwner(uid) || isAdmin();
+        allow create, update: if isActiveOwner(uid) && isValidNotificationToken();
+        allow delete:         if isOwner(uid) || isAdmin();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  UNIQUE USER IDS  (AX-XXXXXXX code → uid reservation)
+    // ══════════════════════════════════════════════════════════════
+
+    match /userIds/{code} {
+
+      // `get` (single-doc collision check inside the client transaction)
+      // open to any active user; `list` (bulk enumeration) admin-only.
+      allow get:  if isActiveUser();
+      allow list: if isAdmin();
+
+      allow create: if isActiveUser()
+          && code.matches('^AX-[0-9]{7}$')
+          && request.resource.data.keys().hasOnly(['uid'])
+          && request.resource.data.uid is string
+          && request.resource.data.uid == currentUid();
+
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ATTENDANCE
+    // ══════════════════════════════════════════════════════════════
+
+    match /attendance/{uid} {
+
+      allow read, write: if false;
+
+      match /days/{date} {
+        allow read:   if isActiveOwner(uid) || isAdmin();
+        allow create: if (isActiveOwner(uid) || isAdmin()) && isValidAttendance() && dateMatchesDocId(date);
+        allow update: if (isActiveOwner(uid) || isAdmin()) && isValidAttendance() && dateMatchesDocId(date);
+        allow delete: if isActiveOwner(uid) || isAdmin();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  WITHDRAWALS  (new feature)
+    // ══════════════════════════════════════════════════════════════
+
+    match /withdrawals/{docId} {
+
+      allow read: if isAdmin();
+      allow read: if isActiveUser() && resource.data.uid == currentUid();
+
+      allow create: if isActiveUser()
+          && isValidWithdrawal()
+          && request.resource.data.uid == currentUid();
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  BACKUP
+    // ══════════════════════════════════════════════════════════════
+
+    match /backup/{uid} {
+
+      allow read, write: if false;
+
+      match /days/{date} {
+        allow read:           if isActiveOwner(uid) || isAdmin();
+        allow create, update: if (isActiveOwner(uid) || isAdmin()) && isValidAttendance() && dateMatchesDocId(date);
+        allow delete:         if isActiveOwner(uid) || isAdmin();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  REFERRALS
+    // ══════════════════════════════════════════════════════════════
+
+    match /referrals/{referralId} {
+
+      allow read: if isAdmin() || isOwner(referralId);
+
+      allow create: if isActiveUser()
+          && isValidReferral()
+          && referralId == currentUid()
+          && request.resource.data.referrerId != currentUid();
+
+      allow update: if isAdmin()
+          && request.resource.data.referrerId == resource.data.referrerId;
+
+      allow delete: if isAdmin();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  REFERRAL CODES  (short-code → uid lookup)
+    // ══════════════════════════════════════════════════════════════
+
+    match /referralCodes/{code} {
+
+      allow read: if isActiveUser();
+
+      allow create, update: if isActiveOwner(get(/databases/$(database)/documents/referralCodes/$(code)).data.uid)
+          || (isActiveUser()
+              && request.resource.data.keys().hasAll(['uid'])
+              && request.resource.data.uid == currentUid());
+
+      allow delete: if isAdmin();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  WEEKLY PRIZE
+    // ══════════════════════════════════════════════════════════════
+
+    match /weeklyPrize/{weekId} {
+
+      allow read: if isActiveUser();
+
+      allow create, update: if isAdmin()
+          && request.resource.data.keys().hasAll(['startDate', 'endDate', 'tiers'])
+          && request.resource.data.startDate is timestamp
+          && request.resource.data.endDate   is timestamp
+          && request.resource.data.tiers is list;
+
+      allow delete: if isAdmin();
+
+      match /entries/{uid} {
+
+        allow read: if isActiveUser();
+
+        allow create: if isActiveOwner(uid)
+            && isValidLeaderboardEntry()
+            && request.resource.data.uid == uid;
+
+        allow update: if isActiveOwner(uid)
+            && isValidLeaderboardEntry()
+            && isValidLeaderboardUpdate()
+            && request.resource.data.uid == uid;
+
+        allow delete: if isAdmin();
+      }
+
+      match /winners/{uid} {
+
+        allow read: if isActiveUser();
+
+        allow create, update: if isAdmin()
+            && request.resource.data.keys().hasAll(['uid', 'tier', 'coinsAwarded', 'awardedAt'])
+            && request.resource.data.uid is string
+            && request.resource.data.coinsAwarded is int
+            && request.resource.data.awardedAt is timestamp;
+
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  LEADERBOARD  (legacy — kept for backward compatibility)
+    // ══════════════════════════════════════════════════════════════
+
+    match /leaderboard/{weekId} {
+
+      allow read: if isActiveUser();
+
+      match /entries/{uid} {
+
+        allow read: if isActiveUser();
+
+        allow create: if isActiveOwner(uid)
+            && isValidLeaderboardEntry()
+            && request.resource.data.uid == uid;
+
+        allow update: if isActiveOwner(uid)
+            && isValidLeaderboardEntry()
+            && isValidLeaderboardUpdate()
+            && request.resource.data.uid == uid;
+
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  PRIZE REDEMPTIONS
+    // ══════════════════════════════════════════════════════════════
+
+    match /prizeRedemptions/{docId} {
+
+      allow read: if isAdmin();
+      allow read: if isActiveUser() && resource.data.uid == currentUid();
+
+      allow create: if isActiveUser()
+          && isValidPrizeRedemption()
+          && request.resource.data.uid == currentUid();
+
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  ADMIN AUDIT LOG
+    // ══════════════════════════════════════════════════════════════
+
+    match /adminAuditLog/{docId} {
+
+      allow read: if isAdmin();
+
+      allow create: if isAuthenticated()
+          && request.resource.data.keys().hasAll(['adminUid', 'action'])
+          && request.resource.data.action is string
+          && request.resource.data.action.size() <= 200
+          && request.resource.data.adminUid == currentUid()
+          && (!('targetUserId' in request.resource.data)
+              || (request.resource.data.targetUserId is string
+                  && request.resource.data.targetUserId.size() <= 128))
+          && (!('details' in request.resource.data)
+              || (request.resource.data.details is string
+                  && request.resource.data.details.size() <= 500))
+          && (!('deviceInfo' in request.resource.data)
+              || (request.resource.data.deviceInfo is string
+                  && request.resource.data.deviceInfo.size() <= 200));
+
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  PERMISSION ALERTS
+    // ══════════════════════════════════════════════════════════════
+
+    function isValidPermissionAlert() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'collection', 'operation'])
+          && data.uid is string
+          && data.uid == request.auth.uid
+          && data.collection is string
+          && data.collection.size() <= 200
+          && data.operation is string
+          && data.operation in ['read', 'create', 'update', 'delete'];
+    }
+
+    match /permissionAlerts/{uid} {
+
+      allow read: if isAdmin() || isOwner(uid);
+
+      allow create, update: if isActiveOwner(uid) && isValidPermissionAlert();
+
+      allow delete: if isAdmin();
+
+      match /errors/{errorId} {
+
+        allow read: if isAdmin() || isOwner(uid);
+
+        allow create: if isActiveOwner(uid) && isValidPermissionAlert();
+
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  CATCH-ALL  (deny everything else)
+    // ══════════════════════════════════════════════════════════════
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}

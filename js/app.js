@@ -1276,7 +1276,7 @@ async function buildDashboard() {
   const attData = await Promise.all(sample.map(u => loadAttendance(u.id, ym)));
 
   let totalPresent = 0, totalHalf = 0, totalAbsent = 0, totalRecs = 0;
-  const attBlocked = attData.every(r => r.length === 0) && sample.length > 0;
+  const attBlocked = ATTENDANCE_PERMISSION_DENIED;
 
   attData.forEach(recs => {
     const s = attSummary(recs);
@@ -3087,7 +3087,7 @@ async function showUserDetail(uid) {
     const records = await loadAttendance(uid, ym);
     const s       = attSummary(records);
     const estSal  = estimatedSalary(u, s);
-    const attBlocked = records.length === 0 && u.name;
+    const attBlocked = ATTENDANCE_PERMISSION_DENIED;
     const audit   = await computeUserFraudAudit(u, records);
 
     document.getElementById('userDetailBody').innerHTML = `
@@ -3157,7 +3157,7 @@ async function showUserDetail(uid) {
       <div class="bg-soft-surface rounded-2xl p-4 mb-4">
         <h4 class="font-semibold text-primary mb-2">
           Attendance — ${new Date().toLocaleString('default',{month:'long',year:'numeric'})}
-          ${attBlocked && records.length === 0 ? '<span class="text-xs text-red-400 font-normal ml-2">(rules patch needed)</span>' : ''}
+          ${attBlocked ? '<span class="text-xs text-red-400 font-normal ml-2">(rules patch needed)</span>' : ''}
         </h4>
         ${s.total === 0
           ? `<p class="text-secondary text-sm">${attBlocked ? 'Cannot read attendance — apply FIRESTORE_RULES_PATCH.md.' : 'No records this month.'}</p>`
@@ -3400,9 +3400,7 @@ async function buildAttendance() {
 
   if (attSelectedUser) {
     records = await loadAttendance(attSelectedUser, attSelectedYM);
-    // Heuristic: user has a profile (name set) but zero records → likely rules blocked
-    const selU = ALL_USERS.find(u => u.id === attSelectedUser);
-    attBlocked = records.length === 0 && !!selU?.name;
+    attBlocked = ATTENDANCE_PERMISSION_DENIED;
   }
 
   const ymOptions = [];
@@ -3591,7 +3589,7 @@ async function buildSalary() {
   const ym      = currentYM();
   const sample  = ALL_USERS.slice(0, 20);
   const attData = await Promise.all(sample.map(u => loadAttendance(u.id, ym)));
-  const attBlocked = attData.every(r => r.length === 0) && sample.length > 0;
+  const attBlocked = ATTENDANCE_PERMISSION_DENIED;
 
   const rows = sample.map((u, i) => {
     const s = attSummary(attData[i]);
