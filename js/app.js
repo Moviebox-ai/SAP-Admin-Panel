@@ -2969,8 +2969,6 @@ async function autoFixUserCoins(uid, targetCoins) {
   try {
     const userRef = db.collection('users').doc(uid);
     const walletRef = userRef.collection('wallet').doc('wallet');
-    const auditLogRef = db.collection('fraudAuditLogs').doc();
-
     const batch = db.batch();
     batch.set(userRef, {
       axCoins: legit,
@@ -2987,17 +2985,22 @@ async function autoFixUserCoins(uid, targetCoins) {
       lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
-    batch.set(auditLogRef, {
-      uid: uid,
-      userName: u.name || '—',
-      previousBalance: current,
-      correctedBalance: legit,
-      deductedHackedCoins: deducted,
-      adminEmail: currentAdmin?.email || 'admin',
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    });
-
     await batch.commit();
+
+    // Audit log best-effort: iska fail hona coin fix ko rollback na kare.
+    try {
+      await db.collection('fraudAuditLogs').add({
+        uid: uid,
+        userName: u.name || '—',
+        previousBalance: current,
+        correctedBalance: legit,
+        deductedHackedCoins: deducted,
+        adminEmail: currentAdmin?.email || 'admin',
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (logErr) {
+      console.warn('fraudAuditLogs write skipped:', logErr.message);
+    }
 
     // Update in-memory state
     const idx = ALL_USERS.findIndex(x => x.id === uid);
@@ -3380,7 +3383,7 @@ function openEditUserModal(uid) {
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label class="block text-xs font-medium text-secondary mb-1">Unique ID</label>
-          <input id="editUniqueId" type="text" value="${(u.uniqueId || '').replace(/"/g, '&quot;')}" placeholder="e.g. 1001" class="input-field font-mono" />
+          <input id="editUniqueId" type="text" value="${(u.uniqueId || '').replace(/"/g, '&quot;')}" placeholder="AX-1234567" class="input-field font-mono" />
         </div>
         <div>
           <label class="block text-xs font-medium text-secondary mb-1">Coin Balance (🪙)</label>
@@ -3438,18 +3441,30 @@ async function saveUserProfile(uid) {
   const name          = document.getElementById('editName').value.trim();
   const email         = document.getElementById('editEmail').value.trim();
   const uniqueId      = document.getElementById('editUniqueId').value.trim();
-  const coins         = Number(document.getElementById('editCoins').value) || 0;
+  const coins         = Math.round(Number(document.getElementById('editCoins').value) || 0);
   const monthlySalary = Number(document.getElementById('editSalary').value) || 0;
   const currency      = document.getElementById('editCurrency').value || 'INR';
-  const workingDays   = Number(document.getElementById('editWorkingDays').value) || 26;
+  const workingDays   = Math.round(Number(document.getElementById('editWorkingDays').value) || 26);
   const standardHours = Number(document.getElementById('editStdHours').value) || 8;
   const overtimeRate  = Number(document.getElementById('editOTRate').value) || 1.5;
 
-  if (!name) {
-    errEl.textContent = 'Name is required.';
-    errEl.classList.remove('hidden');
-    return;
-  }
+  // Ye limits Firestore rules ke owner-validators se match karti hain.
+  // Agar admin inse bahar ki value save kare to panel ka write to pass ho
+  // jata hai (admin bypass), lekin baad me USER ke app ke saare writes
+  // (coins/spin/profile sync) permission-denied ho jate hain.
+  const fail = (msg) => { errEl.textContent = msg; errEl.classList.remove('hidden'); };
+  if (!name)                         return fail('Name is required.');
+  if (name.length > 100)             return fail('Name must be 100 characters or fewer.');
+  if (uniqueId && !/^AX-[0-9]{7}$/.test(uniqueId))
+                                     return fail('Unique ID format must be AX-1234567 (AX- + 7 digits), or leave it blank to keep the current one.');
+  if (coins < 0 || coins > 1000000)  return fail('Coin balance must be between 0 and 1,000,000.');
+  if (monthlySalary < 0 || monthlySalary > 10000000)
+                                     return fail('Monthly salary must be between 0 and 10,000,000.');
+  if (workingDays < 1 || workingDays > 31)
+                                     return fail('Working days must be between 1 and 31.');
+  if (standardHours < 0 || standardHours > 24)
+                                     return fail('Std hours/day must be between 0 and 24.');
+  if (overtimeRate < 0)              return fail('Overtime rate cannot be negative.');
 
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner spinner-sm"></div> Saving…';
@@ -3458,7 +3473,6 @@ async function saveUserProfile(uid) {
     const updateData = {
       name,
       email,
-      uniqueId,
       monthlySalary,
       currency,
       workingDays,
@@ -3476,6 +3490,9 @@ async function saveUserProfile(uid) {
       // leaves totalCoinsEarned/spin metadata/etc. untouched.
       rewards: { coinBalance: coins }
     };
+    // uniqueId sirf tab likho jab valid ho — blank '' likhne se user doc ki
+    // validation toot jati hai aur app ke saare future writes fail hote hain.
+    if (uniqueId) updateData.uniqueId = uniqueId;
 
     // The `users/{uid}` doc's axCoins/coins/rewards.coinBalance fields are
     // what THIS panel and the app read, but the live app spends/reads its
@@ -3496,7 +3513,12 @@ async function saveUserProfile(uid) {
     // Update in-memory ALL_USERS
     const idx = ALL_USERS.findIndex(x => x.id === uid);
     if (idx !== -1) {
-      ALL_USERS[idx] = { ...ALL_USERS[idx], ...updateData };
+      ALL_USERS[idx] = {
+        ...ALL_USERS[idx],
+        ...updateData,
+        // shallow spread rewards ke baaki fields (totalCoinsEarned etc.) mita deta tha
+        rewards: { ...(ALL_USERS[idx].rewards || {}), ...updateData.rewards }
+      };
     }
 
     closeModal('editUserModal');

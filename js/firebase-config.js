@@ -226,18 +226,70 @@ async function loadBannedUsers() {
   }
 }
 
+// ── Users: REAL-TIME listener ──────────────────────────────────
+// Pehle users sirf ek baar .get() se load hote the, isliye app me jo
+// coins/profile change hota tha wo panel me tab tak nahi dikhta tha jab
+// tak manually refresh na karo. Ab onSnapshot se live update hota hai.
+// NOTE: orderBy('name') hata diya — Firestore orderBy us document ko
+// result se hata deta hai jisme 'name' field hi na ho (e.g. naya user
+// jiska sirf {uid, uniqueId} bana ho). Sorting ab client-side hoti hai.
+let usersUnsub = null;
+let usersRenderTimer = null;
+
+function sortUsersByName(list) {
+  return list.sort((a, b) =>
+    String(a.name || '\uffff').toLowerCase().localeCompare(String(b.name || '\uffff').toLowerCase()));
+}
+
+function applyUsersSnapshot(docs) {
+  ALL_USERS = sortUsersByName(docs.map(doc => ({ id: doc.id, ...doc.data() })));
+  const countEl = document.getElementById('navUserCount');
+  if (countEl) countEl.textContent = ALL_USERS.length;
+  if (typeof updateFraudNavBadge === 'function') updateFraudNavBadge();
+
+  clearTimeout(usersRenderTimer);
+  usersRenderTimer = setTimeout(() => {
+    if (currentPage === 'users' && document.getElementById('usersTbody')) {
+      filterUsers(); // search/filter inputs ko reset kiye bina table refresh
+    } else if (currentPage === 'fraud' && typeof filterFraudUsers === 'function'
+               && document.getElementById('fraudTbody')) {
+      filterFraudUsers();
+    } else if (['dashboard','salary','analytics','fraud'].includes(currentPage)) {
+      _navigateInternal(currentPage);
+    }
+  }, 300);
+}
+
+function listenUsers() {
+  if (usersUnsub) return;
+  usersLoading = true;
+  try {
+    usersUnsub = db.collection('users').onSnapshot(snap => {
+      usersLoading = false;
+      applyUsersSnapshot(snap.docs);
+    }, err => {
+      usersLoading = false;
+      usersUnsub = null;
+      console.error('listenUsers:', err);
+      if (err.code === 'permission-denied') {
+        showToast('Permission denied on users collection. Check Firestore rules.', 'error');
+      }
+    });
+  } catch (e) {
+    usersLoading = false;
+    console.error('listenUsers setup:', e);
+  }
+}
+
+// Manual / forced refresh (Refresh button + admin verify). Server se fresh
+// data kheenchta hai aur live listener bhi start kar deta hai.
 async function loadAllUsers() {
   usersLoading = true;
   try {
     await loadBannedUsers();
-    const snap = await db.collection('users').orderBy('name').get();
-    ALL_USERS = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    const countEl = document.getElementById('navUserCount');
-    if (countEl) countEl.textContent = ALL_USERS.length;
-    if (typeof updateFraudNavBadge === 'function') updateFraudNavBadge();
-    if (['dashboard','users','salary','analytics','fraud'].includes(currentPage)) {
-      _navigateInternal(currentPage);
-    }
+    const snap = await db.collection('users').get({ source: 'server' });
+    applyUsersSnapshot(snap.docs);
+    listenUsers();
   } catch (e) {
     console.error('loadAllUsers:', e);
     if (e.code === 'permission-denied') {
