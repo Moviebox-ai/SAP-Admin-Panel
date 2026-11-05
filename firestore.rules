@@ -120,7 +120,7 @@ service cloud.firestore {
           && (!('overtimeRate' in data) || (data.overtimeRate is number && data.overtimeRate >= 0))
           && (!('rewards' in data) || isValidRewardsMap(data.rewards))
           && (!('leaderboard' in data) || isValidLeaderboardMap(data.leaderboard))
-          && (!('uniqueId' in data) || (data.uniqueId is string && data.uniqueId.matches('^AX-[0-9]{7}$')))
+          && (!('uniqueId' in data) || (data.uniqueId is string && (data.uniqueId == '' || data.uniqueId.matches('^AX-[0-9]{7}$'))))
           && (!('axCoins' in data) || (data.axCoins is int && data.axCoins >= 0 && data.axCoins <= 10000000))
           && (!('userId' in data) || data.userId is string)
           && (!('lastUpdated' in data) || (data.lastUpdated is timestamp || data.lastUpdated is number));
@@ -635,6 +635,18 @@ service cloud.firestore {
 
       allow update: if false;
       allow delete: if false;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  FRAUD AUDIT LOGS  (admin panel "Auto-Fix" coin corrections)
+    //  Pehle iska koi rule nahi tha -> catch-all ne deny kar diya aur
+    //  Auto-Fix ka poora batch (user + wallet update) fail ho jata tha.
+    // ══════════════════════════════════════════════════════════════
+
+    match /fraudAuditLogs/{docId} {
+      allow read:   if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
     }
 
     // ══════════════════════════════════════════════════════════════
